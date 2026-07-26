@@ -1,0 +1,41 @@
+# Homelab API Configuration
+# Copy this file to /etc/homelab/api/config.yml and edit with production values
+
+# PostgreSQL Database Connection
+database:
+  host: YOUR_DB_HOST
+  port: 5432
+  name: mailserver
+  user: dovecot_user
+  password: YOUR_DB_PASSWORD_HERE
+
+# JWT Configuration
+jwt:
+  secret: YOUR_JWT_SECRET_KEY_HERE  # Change this to a strong random value in production
+  algorithm: HS256
+  expiry_seconds: 3600              # 1 hour
+  refresh_expiry_seconds: 2592000   # 30 days
+
+# Session/Cookie Configuration
+session:
+  secure: 0                          # Set to 1 when serving behind HTTPS proxy; 0 for local HTTP dev
+
+# API Server Configuration
+server:
+  host: 0.0.0.0
+  port: 3000
+  workers: 4
+  heartbeat_timeout: 600        # Seconds before Hypnotoad kills a blocked worker (default 50; increase for large uploads)
+
+# Logging
+logging:
+  level: info
+  format: json
+
+# File Storage (Drive API) — the homelab-api-backend-processor package also
+# needs its own copy of the storage.drive_path value (see its config example)
+# since it connects to the same NFS mount independently.
+storage:
+  drive_path: /mnt/homelab-drive    # NFS mount for user Drive data
+  max_file_size_mb: 10240             # Per-upload hard limit (10GB)
+  max_concurrent_uploads: 4           # Advertised concurrency limit for clients

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= stash('title') // 'Homelab Drive' %></title>
+  <link rel="stylesheet" href="/style.css?v=<%= app->config->{asset_version} // '1' %>">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jstree@latest/dist/themes/default/style.min.css">
+  <script src="/htmx.min.js"></script>
+</head>
+<body class="<%= stash('device_class') // 'desktop' %>" data-trash-dir-id="<%= stash('trash_dir_id') // '' %>">
+
+<div class="alpha-banner">
+  <span class="alpha-banner-icon">🚧</span>
+  BETA SOFTWARE — Expect changes, and lots of them.
+  <span class="alpha-banner-icon">🚧</span>
+</div>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <button class="hamburger" id="sidebar-toggle" onclick="DriveUI.toggleSidebar()" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+    <a href="/drive" class="logo">Homelab Drive</a>
+  </div>
+  <div class="topbar-center" id="breadcrumb"
+    hx-get="/drive/breadcrumb"
+    hx-trigger="load, breadcrumbChanged from:body"
+    hx-vals='js:{dir_id: new URLSearchParams(location.search).get("dir_id") || ""}'
+    hx-target="this"
+    hx-swap="innerHTML">
+  </div>
+  <div id="upload-indicator" class="upload-indicator hidden">
+    <button class="btn btn-sm upload-toggle" onclick="DriveUI.toggleUploadPanel()">
+      📤 <span id="upload-indicator-label">Uploading</span>
+    </button>
+    <div id="upload-panel" class="upload-panel hidden">
+      <div id="upload-progress"></div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <div id="quota-bar"
+      hx-get="/drive/quota"
+      hx-trigger="load, fileUploaded from:body, fileListChanged from:body"
+      hx-target="this"
+      hx-swap="innerHTML">
+    </div>
+    <span class="user-email"><%= session 'email' %></span>
+    <form method="post" action="/logout" style="display:inline">
+      <button type="submit" class="btn btn-ghost">Sign out</button>
+    </form>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-section">
+      <a href="javascript:void(0)" onclick="DriveUI.navigate(null)" class="sidebar-home"
+         ondragover="DriveUI.homeDragOver(event, this)"
+         ondragleave="DriveUI.homeDragLeave(event, this)"
+         ondrop="DriveUI.homeDrop(event, this)">
+        🏠 My Drive
+      </a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-label">Folders</div>
+      <div id="dir-tree"></div>
+    </div>
+    <div class="sidebar-section sidebar-bottom">
+      <a href="/drive/shared-with-me" class="sidebar-link">Shared with me</a>
+      <a href="/drive/trash" class="sidebar-link" onclick="return DriveUI.safeNavigate('/drive/trash')">Trash</a>
+    </div>
+  </aside>
+
+  <main class="main-content">
+    %= content
+  </main>
+</div>
+
+<div id="modal-backdrop" class="modal-backdrop hidden"></div>
+<div id="modal" class="modal modal-content hidden"></div>
+
+<div id="video-modal" class="video-modal hidden">
+  <div class="video-modal-backdrop" onclick="DriveUI.closeVideo()"></div>
+  <div class="video-modal-content">
+    <div class="video-modal-header">
+      <span id="video-modal-title"></span>
+      <button onclick="DriveUI.closeVideo()">✕</button>
+    </div>
+    <video id="video-player" controls autoplay>
+      Your browser does not support the video tag.
+    </video>
+  </div>
+</div>
+
+<div id="sidebar-overlay" onclick="DriveUI.closeSidebar()"></div>
+<script src="https://cdn.jsdelivr.net/npm/jquery@latest/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jstree@latest/dist/jstree.min.js"></script>
+<script src="/app.js?v=<%= app->config->{asset_version} // '1' %>"></script>
+</body>
+</html>

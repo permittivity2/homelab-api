@@ -1,0 +1,1 @@
+<div class="alert alert-error"><%= stash('error') // 'An error occurred' %></div>

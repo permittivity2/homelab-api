@@ -1,0 +1,13 @@
+% my $q = stash('quota') // {};
+% if ($q->{success}) {
+%   my $quota = $q->{quota} // {};
+%   my $used  = $quota->{used_bytes}  // 0;
+%   my $total = $quota->{limit_bytes} // 0;
+%   my $pct   = $quota->{percent_used} // ($total > 0 ? int($used / $total * 100) : 0);
+%   my $label = format_size($used) . ' of ' . format_size($total);
+<div class="quota-bar" title="<%= $label %>">
+  <div class="quota-fill<%= $pct >= 90 ? ' quota-critical' : $pct >= 75 ? ' quota-warn' : '' %>"
+       style="width: <%= $pct %>%"></div>
+</div>
+<span class="quota-label"><%= $label %></span>
+% }

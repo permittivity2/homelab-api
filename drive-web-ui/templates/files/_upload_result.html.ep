@@ -1,0 +1,11 @@
+% if (stash('success')) {
+<div class="upload-item upload-ok">
+  <span class="upload-filename"><%= stash('filename') %></span>
+  <span class="upload-status">Uploaded</span>
+</div>
+% } else {
+<div class="upload-item upload-fail">
+  <span class="upload-filename"><%= stash('filename') // 'File' %></span>
+  <span class="upload-status">Failed: <%= stash('error') // 'unknown error' %></span>
+</div>
+% }

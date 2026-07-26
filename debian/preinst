@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    install|upgrade)
+        echo "Homelab API pre-installation checks..."
+        ;;
+    *)
+        ;;
+esac
+
+exit 0

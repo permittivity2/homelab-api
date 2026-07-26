@@ -1,0 +1,513 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use POSIX qw(strftime :sys_wait_h);
+use Getopt::Long;
+use DBI;
+use Digest::SHA;
+use JSON::XS qw(decode_json encode_json);
+use YAML::XS qw(LoadFile);
+use Sys::Hostname;
+use File::Path qw(make_path);
+use File::Basename qw(dirname);
+use File::Copy qw(copy);
+use File::Temp qw(tempdir);
+use Archive::Zip qw(:ERROR_CODES);
+use Image::Magick;
+
+# ── Configuration ────────────────────────────────────────────────────────────
+
+my $config_file = '/etc/homelab/processor/config.yml';
+GetOptions('config=s' => \$config_file) or die "Usage: $0 [--config /path/to/config.yml]\n";
+
+die "Config file not found: $config_file\n" unless -f $config_file;
+my $config = LoadFile($config_file);
+
+my $db_cfg    = $config->{database};
+my $proc_cfg  = $config->{processor} // {};
+my $stor_cfg  = $config->{storage}   // {};
+
+my $MAX_WORKERS    = $proc_cfg->{max_workers}           // 8;
+my $POLL_INTERVAL  = $proc_cfg->{poll_interval_seconds} // 2;
+my $DRIVE_PATH     = $stor_cfg->{drive_path}            // '/mnt/homelab-drive';
+my $MAX_RETRIES    = 3;
+my $STALE_MINUTES  = 10;
+my $CHUNK_SIZE     = 1_048_576;  # 1MB
+
+my $DSN = sprintf('dbi:Pg:host=%s;port=%s;dbname=%s',
+    $db_cfg->{host}, $db_cfg->{port} // 5432, $db_cfg->{name});
+my $DB_USER = $db_cfg->{user};
+my $DB_PASS = $db_cfg->{password};
+
+my $HOSTNAME   = hostname();
+my $WORKER_ID  = "$HOSTNAME:$$";
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+
+sub log_info  { _log('INFO',  @_) }
+sub log_warn  { _log('WARN',  @_) }
+sub log_error { _log('ERROR', @_) }
+
+sub _log {
+    my ($level, $msg) = @_;
+    my $ts = strftime('%Y-%m-%dT%H:%M:%S', localtime);
+    print "[$ts] [$level] [$$] $msg\n";
+    STDOUT->flush;
+}
+
+# ── DB helpers ───────────────────────────────────────────────────────────────
+
+sub db_connect {
+    my $dbh = DBI->connect($DSN, $DB_USER, $DB_PASS, {
+        RaiseError => 1,
+        PrintError => 0,
+        AutoCommit => 1,
+    }) or die "DB connect failed: $DBI::errstr\n";
+    return $dbh;
+}
+
+# ── Disk helpers ─────────────────────────────────────────────────────────────
+
+sub disk_path {
+    my ($user_id, $uuid) = @_;
+    my $hex  = substr($uuid, 0, 2) . '/' . substr($uuid, 2, 2);
+    my $path = "$DRIVE_PATH/$user_id/$hex/$uuid";
+    make_path(dirname($path)) unless -d dirname($path);
+    return $path;
+}
+
+# ── Task execution ───────────────────────────────────────────────────────────
+
+sub execute_sha256 {
+    my ($dbh, $task) = @_;
+
+    my $data       = decode_json($task->{task_data} // '{}');
+    my $version_id = $data->{version_id} or die "No version_id in task_data\n";
+    my $uuid       = $data->{uuid}       or die "No uuid in task_data\n";
+
+    # Get user_id from file
+    my $row = $dbh->selectrow_hashref(
+        'SELECT f.user_id FROM api.drive_files f
+         JOIN api.drive_versions v ON v.file_id = f.id
+         WHERE v.id = ?',
+        {}, $version_id
+    ) or die "Version $version_id not found\n";
+
+    my $path = disk_path($row->{user_id}, $uuid);
+    -f $path or die "File not on disk: $path\n";
+
+    my $sha  = Digest::SHA->new(256);
+    my $size = -s $path;
+    log_info("Computing sha256 for version $version_id ($size bytes): $path");
+
+    open my $fh, '<', $path or die "Cannot open $path: $!\n";
+    binmode $fh;
+    while (read($fh, my $chunk, $CHUNK_SIZE)) {
+        $sha->add($chunk);
+    }
+    close $fh;
+
+    my $digest = $sha->hexdigest;
+    $dbh->do('UPDATE api.drive_versions SET sha256 = ? WHERE id = ?', {}, $digest, $version_id);
+    log_info("sha256 complete for version $version_id: $digest");
+}
+
+sub execute_delete {
+    my ($dbh, $task) = @_;
+
+    my $file_id = $task->{file_id};
+    log_info("Processing delete for file_id $file_id");
+
+    # Get user_id and total size for quota update
+    my $file = $dbh->selectrow_hashref(
+        'SELECT user_id FROM api.drive_files WHERE id = ?', {}, $file_id
+    ) or die "File $file_id not found\n";
+
+    my $versions = $dbh->selectall_arrayref(
+        'SELECT file_size FROM api.drive_versions WHERE file_id = ?',
+        { Slice => {} }, $file_id
+    );
+
+    my $total_bytes = 0;
+    $total_bytes += $_->{file_size} for @$versions;
+
+    # Move to Trash directory. File stays on disk; quota is NOT freed yet.
+    my $trash = $dbh->selectrow_hashref(
+        'SELECT id FROM api.drive_directories WHERE user_id = ? AND is_trash = TRUE LIMIT 1',
+        {}, $file->{user_id}
+    );
+    unless ($trash) {
+        # Create Trash dir if missing
+        $dbh->do(q{INSERT INTO api.drive_directories (user_id, dir_name, parent_id, is_trash) VALUES (?, 'Trash', NULL, TRUE)}, {}, $file->{user_id});
+        $trash = $dbh->selectrow_hashref('SELECT id FROM api.drive_directories WHERE user_id = ? AND is_trash = TRUE LIMIT 1', {}, $file->{user_id});
+    }
+    $dbh->do(
+        'UPDATE api.drive_files SET dir_id = ?, deleted_at = NOW(), updated_at = NOW() WHERE id = ?',
+        {}, $trash->{id}, $file_id
+    );
+
+    log_info("Moved file_id $file_id → Trash (quota unchanged until Empty Trash)");
+}
+
+sub execute_copy {
+    my ($dbh, $task) = @_;
+
+    my $data = decode_json($task->{task_data} // '{}');
+    my $src_uuid     = $data->{source_uuid}      or die "No source_uuid in task_data\n";
+    my $src_user_id  = $data->{source_user_id}   or die "No source_user_id in task_data\n";
+    my $dest_dir_id  = $data->{dest_dir_id};     # undef = root
+    my $dest_name    = $data->{dest_file_name}   or die "No dest_file_name in task_data\n";
+    my $dest_size    = $data->{dest_file_size}   or die "No dest_file_size in task_data\n";
+
+    my $src_path  = disk_path($src_user_id, $src_uuid);
+    -f $src_path or die "Source file not on disk: $src_path\n";
+
+    # Generate new UUID for the destination file
+    my $uuid_row  = $dbh->selectrow_hashref('SELECT gen_random_uuid()::TEXT as uuid');
+    my $new_uuid  = $uuid_row->{uuid};
+    my $dest_path = disk_path($src_user_id, $new_uuid);
+
+    log_info("Copying $src_path → $dest_path ($dest_size bytes)");
+    copy($src_path, $dest_path) or die "File copy failed: $!\n";
+    log_info("Copy complete for $new_uuid");
+
+    # Check for filename conflict at destination (may have appeared since task was queued)
+    my $conflict = $dbh->selectrow_hashref(
+        'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ? AND is_deleted = FALSE',
+        {}, $src_user_id, $dest_name, $dest_dir_id
+    );
+    if ($conflict) {
+        unlink $dest_path;
+        die "Destination file '$dest_name' already exists — copy aborted\n";
+    }
+
+    # Create new file + version records
+    my $new_file = $dbh->selectrow_hashref(
+        'INSERT INTO api.drive_files (user_id, file_name, dir_id) VALUES (?, ?, ?) RETURNING id',
+        {}, $src_user_id, $dest_name, $dest_dir_id
+    );
+    my $new_version = $dbh->selectrow_hashref(
+        'INSERT INTO api.drive_versions (file_id, uuid, file_size, mime_type) SELECT ?, ?, file_size, mime_type FROM api.drive_versions WHERE id = ? RETURNING id',
+        {}, $new_file->{id}, $new_uuid, $data->{source_version_id}
+    );
+    $dbh->do(
+        'UPDATE api.drive_files SET current_version_id = ? WHERE id = ?',
+        {}, $new_version->{id}, $new_file->{id}
+    );
+
+    # Update quota
+    $dbh->do(
+        'INSERT INTO api.drive_quota (user_id, usage_bytes, file_count) VALUES (?, ?, 1)
+         ON CONFLICT (user_id) DO UPDATE SET usage_bytes = api.drive_quota.usage_bytes + ?, file_count = api.drive_quota.file_count + 1, last_updated = NOW()',
+        {}, $src_user_id, $dest_size, $dest_size
+    );
+
+    # Enqueue sha256 task for the new file
+    $dbh->do(
+        'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+        {}, $new_file->{id}, 'sha256',
+        encode_json({ version_id => $new_version->{id}, uuid => $new_uuid }),
+        'queued'
+    );
+
+    log_info("Copy created new file_id=$new_file->{id} ($dest_name), sha256 task queued");
+}
+
+sub execute_zip {
+    my ($dbh, $task) = @_;
+
+    my $data       = decode_json($task->{task_data} // '{}');
+    my $out_uuid   = $data->{output_uuid}        or die "No output_uuid in task_data\n";
+    my $out_ver_id = $data->{output_version_id}  or die "No output_version_id in task_data\n";
+    my $out_name   = $data->{output_name}        // 'archive.zip';
+    my $user_id    = $data->{user_id}            or die "No user_id in task_data\n";
+    my $items      = $data->{items}              // [];
+
+    die "No items in zip manifest\n" unless @$items;
+
+    # Build zip from pre-resolved manifest — no DB queries needed
+    my $zip      = Archive::Zip->new;
+    my $out_path = disk_path($user_id, $out_uuid);
+    make_path(dirname($out_path));
+
+    my $added = 0;
+    for my $item (@$items) {
+        my $disk = disk_path($user_id, $item->{uuid});
+        next unless -f $disk;
+        my $member = $zip->addFile($disk, $item->{zip_path});
+        $member->desiredCompressionMethod(Archive::Zip::COMPRESSION_DEFLATED());
+        $added++;
+    }
+
+    die "No readable files found for zip (0 of " . scalar(@$items) . " items on disk)\n"
+        unless $added;
+
+    $zip->writeToFileNamed($out_path) == AZ_OK
+        or die "Failed to write zip archive to $out_path\n";
+
+    my $zip_size = -s $out_path;
+
+    # Compute sha256 of the zip
+    my $sha = Digest::SHA->new(256);
+    $sha->addfile($out_path);
+    my $sha256 = $sha->hexdigest;
+
+    # Update version record with actual size and sha256
+    $dbh->do(
+        'UPDATE api.drive_versions SET file_size = ?, sha256 = ? WHERE id = ?',
+        {}, $zip_size, $sha256, $out_ver_id
+    );
+
+    # Update quota
+    $dbh->do(
+        'UPDATE api.drive_quota SET usage_bytes = usage_bytes + ?, file_count = file_count + 1, last_updated = NOW() WHERE user_id = ?',
+        {}, $zip_size, $user_id
+    );
+
+    log_info("Zip created: $out_name ($zip_size bytes, $added files from " . scalar(@$items) . " manifest entries)");
+}
+
+sub execute_thumbnail {
+    my ($dbh, $task) = @_;
+
+    my $data       = decode_json($task->{task_data} // '{}');
+    my $uuid       = $data->{uuid} or die "No uuid in thumbnail task_data\n";
+
+    my $file_row = $dbh->selectrow_hashref(
+        'SELECT f.user_id FROM api.drive_files f
+         JOIN api.drive_files_tasks t ON t.file_id = f.id WHERE t.id = ?',
+        {}, $task->{id}
+    ) or die "Cannot find file for thumbnail task id=$task->{id}\n";
+    my $user_id = $file_row->{user_id};
+
+    my $src_path = disk_path($user_id, $uuid);
+    -f $src_path or die "Source image not found: $src_path\n";
+
+    my ($h1, $h2)  = (substr($uuid, 0, 2), substr($uuid, 2, 2));
+    my $thumb_dir  = "$DRIVE_PATH/.thumbnails/$user_id/$h1/$h2";
+    make_path($thumb_dir);
+    my $thumb_path = "$thumb_dir/$uuid.jpg";
+
+    my $img = Image::Magick->new;
+    my $err = $img->Read($src_path);
+    die "Cannot read image $src_path: $err\n" if $err;
+
+    $img->Thumbnail(geometry => '200x200>');
+    $img->Set(quality => 80);
+    $err = $img->Write("jpeg:$thumb_path");
+    die "Cannot write thumbnail $thumb_path: $err\n" if $err;
+
+    log_info("Thumbnail created: $thumb_path");
+}
+
+sub run_task {
+    my ($dbh, $task) = @_;
+
+    if ($task->{task} eq 'sha256') {
+        execute_sha256($dbh, $task);
+    } elsif ($task->{task} eq 'delete') {
+        execute_delete($dbh, $task);
+    } elsif ($task->{task} eq 'copy') {
+        execute_copy($dbh, $task);
+    } elsif ($task->{task} eq 'zip') {
+        execute_zip($dbh, $task);
+    } elsif ($task->{task} eq 'thumbnail') {
+        execute_thumbnail($dbh, $task);
+    } else {
+        die "Unknown task type '$task->{task}' — no handler registered\n";
+    }
+}
+
+sub jail_file {
+    my ($dbh, $file_id, $failed_task) = @_;
+
+    # Find all remaining incomplete non-delete tasks — delete always stays executable
+    my $remaining = $dbh->selectall_arrayref(
+        q{SELECT id, task FROM api.drive_files_tasks
+          WHERE file_id = ? AND completed = FALSE AND task != 'delete'
+          ORDER BY inserted_at},
+        { Slice => {} }, $file_id
+    );
+
+    if (@$remaining) {
+        log_warn("Jailing file_id $file_id — skipping " . scalar(@$remaining) . " remaining task(s):");
+        for my $t (@$remaining) {
+            log_warn("  Skipped task id=$t->{id} type='$t->{task}'");
+        }
+        my @ids = map { $_->{id} } @$remaining;
+        my $placeholders = join(',', ('?') x @ids);
+        $dbh->do(
+            "UPDATE api.drive_files_tasks SET completed = TRUE, completed_at = NOW(), status_text = 'skipped: file jailed' WHERE id IN ($placeholders)",
+            {}, @ids
+        );
+    }
+
+    $dbh->do(
+        "UPDATE api.drive_files SET status = 'jailed', updated_at = NOW() WHERE id = ?",
+        {}, $file_id
+    );
+
+    log_error("File $file_id status set to JAILED after permanent failure of task '$failed_task->{task}'");
+}
+
+# ── Child process ─────────────────────────────────────────────────────────────
+
+sub run_child {
+    my ($file_id) = @_;
+
+    my $dbh = db_connect();
+    log_info("Worker started for file_id $file_id");
+
+    # Process all pending tasks for this file_id in insert order
+    while (1) {
+        my $task = $dbh->selectrow_hashref(
+            q{SELECT id, file_id, task, task_data, retry_count
+              FROM api.drive_files_tasks
+              WHERE file_id = ? AND completed = FALSE AND retry_count < ?
+              ORDER BY inserted_at
+              LIMIT 1},
+            {}, $file_id, $MAX_RETRIES
+        );
+        last unless $task;
+
+        # Mark as running
+        $dbh->do(
+            'UPDATE api.drive_files_tasks SET started_at = NOW(), worker_id = ?, status_text = ? WHERE id = ?',
+            {}, $WORKER_ID, 'running', $task->{id}
+        );
+
+        my $ok = eval {
+            run_task($dbh, $task);
+            1;
+        };
+
+        if ($ok) {
+            $dbh->do(
+                'UPDATE api.drive_files_tasks SET completed = TRUE, completed_at = NOW(), status_text = ? WHERE id = ?',
+                {}, 'completed', $task->{id}
+            );
+            log_info("Task $task->{task} completed for file_id $file_id");
+        } else {
+            my $err = $@;
+            chomp $err;
+            my $new_retries = $task->{retry_count} + 1;
+            log_error("Task $task->{task} failed for file_id $file_id (attempt $new_retries/$MAX_RETRIES): $err");
+
+            if ($new_retries >= $MAX_RETRIES) {
+                $dbh->do(
+                    'UPDATE api.drive_files_tasks SET started_at = NULL, worker_id = NULL, retry_count = ?, status_text = ? WHERE id = ?',
+                    {}, $new_retries, 'permanently failed', $task->{id}
+                );
+                jail_file($dbh, $file_id, $task);
+            } else {
+                $dbh->do(
+                    'UPDATE api.drive_files_tasks SET started_at = NULL, worker_id = NULL, retry_count = ?, status_text = ? WHERE id = ?',
+                    {}, $new_retries, "error: $err", $task->{id}
+                );
+            }
+            last;  # Stop processing further tasks for this file on failure
+        }
+    }
+
+    $dbh->disconnect;
+    log_info("Worker done for file_id $file_id");
+    exit 0;
+}
+
+# ── Parent process ────────────────────────────────────────────────────────────
+
+my %active_pids;   # pid → file_id
+my $running = 1;
+
+$SIG{TERM} = $SIG{INT} = sub {
+    log_info("Shutdown signal received — waiting for workers to finish");
+    $running = 0;
+};
+
+$SIG{CHLD} = 'DEFAULT';  # use waitpid instead
+
+log_info("Homelab Drive Task Processor starting (max_workers=$MAX_WORKERS, poll=${POLL_INTERVAL}s)");
+
+my $dbh = db_connect();
+log_info("Database connected: $db_cfg->{host}/$db_cfg->{name}");
+
+while ($running) {
+    # Reap finished children
+    while ((my $pid = waitpid(-1, WNOHANG)) > 0) {
+        my $fid = delete $active_pids{$pid};
+        log_info("Worker (pid=$pid, file_id=$fid) exited") if $fid;
+    }
+
+    my $active = scalar keys %active_pids;
+
+    if ($active < $MAX_WORKERS) {
+        my $slots = $MAX_WORKERS - $active;
+        my @active_file_ids = values %active_pids;
+
+        # Build exclusion list for currently active file_ids
+        my $exclude_sql = @active_file_ids
+            ? 'AND file_id != ALL(?)'
+            : '';
+        my @bind = ($MAX_RETRIES, $STALE_MINUTES);
+        push @bind, \@active_file_ids if @active_file_ids;
+        push @bind, $slots;
+
+        my $rows = $dbh->selectall_arrayref(
+            qq{SELECT DISTINCT ON (file_id) file_id
+               FROM api.drive_files_tasks
+               WHERE completed = FALSE
+                 AND retry_count < ?
+                 AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))
+                 $exclude_sql
+               ORDER BY file_id, inserted_at
+               LIMIT ?},
+            { Slice => {} }, @bind
+        );
+
+        for my $row (@$rows) {
+            my $file_id = $row->{file_id};
+
+            # Claim all pending tasks for this file_id
+            $dbh->do(
+                q{UPDATE api.drive_files_tasks
+                  SET started_at = NOW(), worker_id = ?, status_text = 'claimed'
+                  WHERE file_id = ? AND completed = FALSE AND retry_count < ?
+                    AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))},
+                {}, $WORKER_ID, $file_id, $MAX_RETRIES, $STALE_MINUTES
+            );
+
+            my $pid = fork();
+            die "fork() failed: $!\n" unless defined $pid;
+
+            if ($pid == 0) {
+                # Child — mark parent's DB handle as inactive so it won't
+                # close the underlying socket on undef/DESTROY.
+                $dbh->{InactiveDestroy} = 1;
+                undef $dbh;
+                run_child($file_id);
+                exit 0;
+            }
+
+            # Parent
+            $active_pids{$pid} = $file_id;
+            log_info("Forked worker pid=$pid for file_id=$file_id");
+        }
+    }
+
+    sleep $POLL_INTERVAL;
+}
+
+# Clean shutdown — wait for all children
+log_info("Waiting for " . scalar(keys %active_pids) . " workers to finish");
+while (%active_pids) {
+    my $pid = waitpid(-1, 0);
+    if ($pid > 0) {
+        my $fid = delete $active_pids{$pid};
+        log_info("Worker (pid=$pid, file_id=$fid) finished");
+    }
+}
+
+$dbh->disconnect;
+log_info("Homelab Drive Task Processor stopped");
+exit 0;

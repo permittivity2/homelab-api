@@ -1,0 +1,58 @@
+% layout 'default';
+% title 'Trash';
+
+<div class="file-browser">
+  <div class="browser-toolbar">
+    <h2 class="page-title">Trash</h2>
+    % if (@{stash('files') // []}) {
+    <button class="btn btn-danger"
+      hx-delete="/drive/trash"
+      hx-confirm="Permanently delete all trashed files? This cannot be undone."
+      hx-target="body"
+      hx-swap="none"
+      hx-on::after-request="window.location='/drive/trash'">
+      Empty Trash
+    </button>
+    % }
+  </div>
+
+  % if (!@{stash('files') // []}) {
+    <div class="empty-state">Trash is empty</div>
+  % } else {
+  <table class="file-table">
+    <thead>
+      <tr>
+        <th class="col-name">Name</th>
+        <th class="col-uuid">UUID</th>
+        <th class="col-path">Original Location</th>
+        <th class="col-size">Size</th>
+        <th class="col-date">Deleted</th>
+        <th class="col-actions"></th>
+      </tr>
+    </thead>
+    <tbody>
+      % for my $f (@{stash('files') // []}) {
+      <tr class="file-row" id="trash-<%= $f->{id} %>">
+        <td class="col-name">
+          <span class="file-icon">🗑️</span>
+          <span class="file-name"><%= $f->{file_name} %></span>
+        </td>
+        <td class="col-uuid"><span class="file-uuid" title="<%= $f->{uuid} // '' %>"><%= $f->{uuid} // '' %></span></td>
+        <td class="col-path"><span class="trash-path" title="Will restore to: <%= $f->{dir_path} %>"><%= $f->{dir_path} %></span></td>
+        <td class="col-size"><%= format_size($f->{file_size}) %></td>
+        <td class="col-date"><%= format_date($f->{deleted_at}) %></td>
+        <td class="col-actions">
+          <button class="btn btn-ghost btn-sm"
+            hx-post="/drive/files/<%= $f->{id} %>/restore"
+            hx-target="#trash-<%= $f->{id} %>"
+            hx-swap="outerHTML"
+            hx-confirm="Restore '<%= $f->{file_name} %>' to <%= $f->{dir_path} %>?">
+            Restore
+          </button>
+        </td>
+      </tr>
+      % }
+    </tbody>
+  </table>
+  % }
+</div>

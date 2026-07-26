@@ -1,0 +1,121 @@
+% # OOB: update breadcrumb innerHTML (preserves htmx attrs on the #breadcrumb div)
+% # and current-dir tracker alongside the file rows.
+% # Wrapped in <template> so the browser does not attempt to parse these elements
+% # in table-body context (which corrupts the subsequent <tr> elements).
+<template>
+<div hx-swap-oob="innerHTML:#breadcrumb">
+  <nav class="breadcrumb">
+    <a href="javascript:void(0)" onclick="DriveUI.navigate(null)" class="crumb-root">My Drive</a>
+    % for my $crumb (@{$breadcrumb // []}) {
+      <span class="crumb-sep">/</span>
+      <a href="javascript:void(0)" onclick="DriveUI.navigate(<%= $crumb->{id} %>)" class="crumb-item">
+        <%= $crumb->{name} %>
+      </a>
+    % }
+  </nav>
+</div>
+</template>
+
+% # Directories first (first page only — dirs are not paginated)
+% if ($show_dirs) {
+% for my $d (@{$dirs // []}) {
+<tr class="file-row dir-row" data-id="<%= $d->{id} %>" data-type="dir"
+    ondragover="DriveUI.dirDragOver(event, this)"
+    ondragleave="DriveUI.dirDragLeave(event, this)"
+    ondrop="DriveUI.dirDrop(event, this)"
+    onclick="DriveUI.toggleSelect(this, event)">
+  <td class="col-select" onclick="event.stopPropagation()"><input type="checkbox" class="row-check" onchange="DriveUI.onRowCheck()"></td>
+  <td class="col-name" data-val="<%= $d->{dir_name} %>">
+    <span class="file-icon icon-folder">📁</span>
+    <a href="javascript:void(0)"
+       class="file-name dir-name"
+       onclick="DriveUI.navigate(<%= $d->{id} %>)">
+      <%= $d->{dir_name} %>
+    </a>
+  </td>
+  <td class="col-type" data-val="directory"></td>
+  <td class="col-uuid" data-val=""></td>
+  <td class="col-size" data-val="-1">—</td>
+  <td class="col-date" data-val="<%= $d->{created_at} // '' %>"><%= format_date($d->{created_at}) %></td>
+  <td class="col-status" data-val=""></td>
+  <td class="col-actions">
+    <div class="action-menu">
+      <button class="action-btn" data-id="<%= $d->{id} %>" data-name="<%= $d->{dir_name} %>" data-type="dir" onclick="DriveUI.showActions(event, this)">⋯</button>
+    </div>
+  </td>
+</tr>
+% }
+% } # end if ($show_dirs)
+
+% # Files
+% for my $f (@{$files // []}) {
+%   my $tasks  = $f->{tasks}  // [];
+%   my $status = $f->{status} // 'active';
+<tr class="file-row" id="file-<%= $f->{id} %>" data-id="<%= $f->{id} %>" data-type="file"
+    draggable="true"
+    ondragstart="DriveUI.fileDragStart(event, this)"
+    ondragend="DriveUI.fileDragEnd(event, this)"
+    onclick="DriveUI.toggleSelect(this, event)">
+%   my $mime = ($f->{mime_type} // '') =~ s/;.*//r;
+%   my %_emoji = (img=>'🖼️',video=>'🎬',audio=>'🎵',text=>'📝',zip=>'🗜️',pdf=>'📕',file=>'📄');
+%   my $_icon  = file_icon($f->{mime_type});
+  <td class="col-select" onclick="event.stopPropagation()"><input type="checkbox" class="row-check" onchange="DriveUI.onRowCheck()"></td>
+  <td class="col-name" data-val="<%= $f->{name} %>">
+    % if ($mime =~ m{^image/}) {
+    <img src="/drive/thumbnail/<%= $f->{id} %>" class="file-thumb" loading="lazy"
+         onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex'">
+    <span class="file-icon icon-img" style="display:none">🖼️</span>
+    % } else {
+    <span class="file-icon icon-<%= $_icon %>"><%= $_emoji{$_icon} // '📄' %></span>
+    % }
+    <a href="/drive/download/<%= $f->{id} %>" class="file-name" download="<%= $f->{name} %>">
+      <%= $f->{name} %>
+    </a>
+    % if ($mime =~ m{^video/}) {
+    <button class="play-btn" title="Play" onclick="DriveUI.playVideo(<%= $f->{id} %>, '<%= $f->{name} =~ s/'/\\'/gr %>', '<%= $mime =~ s/'/\\'/gr %>')">▶</button>
+    % }
+  </td>
+  <td class="col-type" data-val="<%= $mime %>"><span class="mime-type" title="<%= $mime %>"><%= $mime %></span></td>
+  <td class="col-uuid" data-val="<%= $f->{uuid} // '' %>"><span class="file-uuid" title="<%= $f->{uuid} // '' %>"><%= $f->{uuid} // '' %></span></td>
+  <td class="col-size" data-val="<%= $f->{file_size} // 0 %>"><%= format_size($f->{file_size}) %></td>
+  <td class="col-date" data-val="<%= $f->{created_at} // '' %>"><%= format_date($f->{created_at}) %></td>
+%   my %task_label = (sha256 => 'SHA256', delete => 'Deleting', copy => 'Copying', zip => 'Zipping');
+%   my $task_name  = @$tasks ? ($task_label{$tasks->[0]} // ucfirst($tasks->[0])) : '';
+  <td class="col-status" data-val="<%= $status eq 'jailed' ? 'error' : (@$tasks ? 'processing' : 'ok') %>">
+    % if ($status eq 'jailed') {
+      <span class="badge badge-error" title="<%= join(', ', @$tasks) %>">Error</span>
+    % } elsif (@$tasks) {
+      <span class="badge badge-warning" title="<%= join(', ', @$tasks) %>"><%= $task_name %></span>
+    % } else {
+      <span class="badge badge-ok">OK</span>
+    % }
+  </td>
+  <td class="col-actions">
+    <div class="action-menu">
+      <button class="action-btn" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" data-type="file" onclick="DriveUI.showActions(event, this)">⋯</button>
+    </div>
+  </td>
+</tr>
+% }
+
+% # Empty state
+% if (!@{$dirs // []} && !@{$files // []}) {
+<tr class="empty-row">
+  <td colspan="8" class="empty-state">This folder is empty</td>
+</tr>
+% }
+
+% # Load more — startat tracks file position only (dirs shown once on page 1)
+% if (($total // 0) > ($startat // 0) + @{$files // []}) {
+<tr class="load-more-row">
+  <td colspan="8">
+    <button class="btn btn-ghost btn-full"
+      hx-get="/drive/files?dir_id=<%= $dir_id // '' %>&startat=<%= ($startat // 0) + @{$files // []} %>"
+      hx-target="#file-tbody"
+      hx-swap="beforeend"
+      hx-select="tr:not(.load-more-row)">
+      Load more
+    </button>
+  </td>
+</tr>
+% }

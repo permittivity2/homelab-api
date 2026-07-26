@@ -1,0 +1,8 @@
+% layout 'public';
+% title 'Share Not Found';
+<div class="pub-file-card">
+  <div class="pub-file-icon">🔗</div>
+  <h1 class="pub-file-name">Share not found</h1>
+  <p class="pub-file-meta">This link may have expired or been revoked.</p>
+  <a href="/login" class="btn btn-primary">Go to Homelab Drive</a>
+</div>

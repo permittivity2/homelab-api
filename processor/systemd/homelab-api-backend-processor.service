@@ -1,0 +1,20 @@
+[Unit]
+Description=Homelab Drive Task Processor
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+ExecStart=/usr/bin/homelab-api-backend-processor --config /etc/homelab/processor/config.yml
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-api-backend-processor
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

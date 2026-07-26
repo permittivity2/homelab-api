@@ -1,0 +1,34 @@
+Template: homelab-api-backend-processor/db/reuse_api_config
+Type: boolean
+Default: true
+Description: Reuse homelab-api's database connection settings?
+ An existing /etc/homelab/api/config.yml was found on this machine.
+ homelab-api-backend-processor connects to the same PostgreSQL database
+ independently — reuse the same host/port/name/user/password from that
+ file instead of entering them again?
+
+Template: homelab-api-backend-processor/db/host
+Type: string
+Default: localhost
+Description: PostgreSQL database host:
+ Enter the same PostgreSQL server homelab-api uses (this daemon connects
+ independently and needs its own copy of the credentials).
+
+Template: homelab-api-backend-processor/db/port
+Type: string
+Default: 5432
+Description: PostgreSQL database port:
+
+Template: homelab-api-backend-processor/db/name
+Type: string
+Default: mailserver
+Description: PostgreSQL database name:
+
+Template: homelab-api-backend-processor/db/user
+Type: string
+Default: dovecot_user
+Description: PostgreSQL database username:
+
+Template: homelab-api-backend-processor/db/password
+Type: password
+Description: PostgreSQL database password:

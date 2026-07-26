@@ -1,0 +1,77 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    configure)
+        echo "Homelab Drive Web UI post-installation setup..."
+
+        # Create homelab user/group if absent (shared with homelab-api)
+        if ! getent group homelab >/dev/null 2>&1; then
+            groupadd -f homelab || true
+        fi
+        if ! getent passwd homelab >/dev/null 2>&1; then
+            useradd -r -g homelab -d /var/lib/homelab -s /usr/sbin/nologin homelab || true
+        fi
+
+        # Config directory — never overwrite an existing config on upgrade
+        if [ ! -d /etc/homelab/drive-web-ui ]; then
+            mkdir -p /etc/homelab/drive-web-ui
+            chown homelab:homelab /etc/homelab/drive-web-ui
+            chmod 750 /etc/homelab/drive-web-ui
+        fi
+
+        if [ ! -f /etc/homelab/drive-web-ui/drive-ui.yml ]; then
+            cp /usr/share/homelab-drive-web-ui/config/drive-ui.yml.example \
+               /etc/homelab/drive-web-ui/drive-ui.yml
+            chown homelab:homelab /etc/homelab/drive-web-ui/drive-ui.yml
+            chmod 640 /etc/homelab/drive-web-ui/drive-ui.yml
+            echo ""
+            echo "*** IMPORTANT: Edit /etc/homelab/drive-web-ui/drive-ui.yml ***"
+            echo "    - Set a strong random 'secrets' value (must match all drive servers)"
+            echo "    - Verify api.base_url and server.listen"
+            echo ""
+        fi
+
+        # Always update asset_version to the package version — busts browser JS/CSS cache
+        NEW_VER=$(dpkg-query -W -f='${Version}' homelab-drive-web-ui 2>/dev/null || echo "unknown")
+        if grep -q "^asset_version:" /etc/homelab/drive-web-ui/drive-ui.yml 2>/dev/null; then
+            sed -i "s|^asset_version:.*|asset_version: \"${NEW_VER}\"|" /etc/homelab/drive-web-ui/drive-ui.yml
+        else
+            echo "asset_version: \"${NEW_VER}\"" >> /etc/homelab/drive-web-ui/drive-ui.yml
+        fi
+
+        # Shared state directory and upload tmpdir
+        if [ ! -d /var/lib/homelab ]; then
+            mkdir -p /var/lib/homelab
+            chown homelab:homelab /var/lib/homelab
+            chmod 750 /var/lib/homelab
+        fi
+        if [ ! -d /var/lib/homelab/tmp ]; then
+            mkdir -p /var/lib/homelab/tmp
+            chown homelab:homelab /var/lib/homelab/tmp
+            chmod 750 /var/lib/homelab/tmp
+        fi
+
+        # Systemd
+        if systemctl is-enabled homelab-drive-web-ui >/dev/null 2>&1; then
+            systemctl restart homelab-drive-web-ui || systemctl start homelab-drive-web-ui
+        else
+            systemctl enable homelab-drive-web-ui
+            systemctl start homelab-drive-web-ui || true
+        fi
+
+        echo "Homelab Drive Web UI installed."
+        echo "Check status: systemctl status homelab-drive-web-ui"
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

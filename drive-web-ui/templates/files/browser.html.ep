@@ -1,0 +1,129 @@
+% layout 'default';
+% title 'Drive';
+
+<div class="file-browser">
+
+  <div class="browser-toolbar">
+    <button class="btn btn-primary" id="upload-btn" onclick="DriveUI.openFilePicker()">
+      Upload
+    </button>
+    <button class="btn btn-secondary"
+      onclick="DriveUI.showNewFolderModal()">
+      New folder
+    </button>
+    <button class="btn btn-danger btn-sm" id="empty-trash-btn" style="display:none" onclick="DriveUI.emptyTrash()">
+      🗑 Empty Trash
+    </button>
+  </div>
+
+  <div id="bulk-toolbar" class="hidden">
+    <span class="bulk-count" id="bulk-count">0 selected</span>
+    <button class="btn btn-ghost btn-sm" id="bulk-trash-btn" onclick="DriveUI.bulkTrash()">🗑 Trash selected</button>
+    <button class="btn btn-ghost btn-sm" id="bulk-restore-btn" onclick="DriveUI.bulkRestore()" style="display:none">♻️ Restore selected</button>
+    <button class="btn btn-ghost btn-sm" id="bulk-zip-btn" onclick="DriveUI.bulkZip()">🗜 Zip selected</button>
+    <button class="btn btn-ghost btn-sm" onclick="DriveUI.showMovePicker()">📁 Move selected</button>
+    <button class="btn btn-ghost btn-sm" onclick="DriveUI.clearSelection()">✕ Clear</button>
+  </div>
+
+  <div id="drop-zone" class="drop-zone">
+    <div class="drop-zone-hint">Drop files here to upload</div>
+
+    <table class="file-table">
+      <thead>
+        <tr>
+          <th class="col-select"><input type="checkbox" id="select-all" onclick="DriveUI.toggleSelectAll(this)"></th>
+          <th class="col-name"     data-sort="name">Name <span class="sort-icon"></span></th>
+          <th class="col-type"     data-sort="type">Type <span class="sort-icon"></span></th>
+          <th class="col-uuid"     data-sort="uuid">UUID <span class="sort-icon"></span></th>
+          <th class="col-size"     data-sort="size">Size <span class="sort-icon"></span></th>
+          <th class="col-date"     data-sort="date">Modified <span class="sort-icon"></span></th>
+          <th class="col-status"   data-sort="status">Status <span class="sort-icon"></span></th>
+          <th class="col-actions"></th>
+        </tr>
+      </thead>
+      <tbody id="file-tbody"
+        hx-get="/drive/files"
+        hx-trigger="load, fileListChanged from:body"
+        hx-vals='js:{dir_id: new URLSearchParams(location.search).get("dir_id") || ""}'
+        hx-target="this"
+        hx-swap="innerHTML"
+        hx-indicator="#loading-indicator">
+      </tbody>
+    </table>
+
+    <div id="loading-indicator" class="htmx-indicator loading-row">Loading…</div>
+  </div>
+
+  <input type="file" id="file-input" multiple style="display:none" onchange="DriveUI.handleFileSelect(this)">
+
+  <div id="new-folder-modal" class="modal-content hidden">
+    <h3>New folder</h3>
+    <form onsubmit="DriveUI.createFolder(event)">
+      <div class="form-group">
+        <label for="new-folder-name">Folder name</label>
+        <input type="text" id="new-folder-name" name="name" required autofocus>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="DriveUI.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="share-modal" class="modal-content hidden">
+    <h3>Share <span id="share-modal-name"></span></h3>
+    <div class="share-tabs">
+      <button class="share-tab active" onclick="DriveUI.switchShareTab(this,'user')">Share with someone</button>
+      <button class="share-tab" onclick="DriveUI.switchShareTab(this,'public')">Public link</button>
+    </div>
+    <div id="share-tab-user" class="share-tab-panel">
+      <div class="form-group">
+        <label>Homelab email address</label>
+        <input type="email" id="share-email-input" placeholder="user@example.com" autocomplete="off">
+      </div>
+      <div id="share-user-result" class="share-result"></div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" onclick="DriveUI.closeModal()">Close</button>
+        <button type="button" class="btn btn-primary" onclick="DriveUI.doShareWithUser()">Share</button>
+      </div>
+    </div>
+    <div id="share-tab-public" class="share-tab-panel hidden">
+      <div id="share-public-off">
+        <p class="share-hint">Create a public link anyone can use to access this item.</p>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" onclick="DriveUI.closeModal()">Close</button>
+          <button type="button" class="btn btn-primary" onclick="DriveUI.doSharePublic()">Create public link</button>
+        </div>
+      </div>
+      <div id="share-public-on" class="hidden">
+        <label class="share-hint">Public link:</label>
+        <div class="share-link-row">
+          <input type="text" id="share-link-input" readonly class="share-link-input">
+          <button class="btn btn-secondary btn-sm" onclick="DriveUI.copyShareLink()">Copy</button>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" onclick="DriveUI.closeModal()">Close</button>
+          <button type="button" class="btn btn-danger btn-sm" onclick="DriveUI.revokePublicShare()">Revoke link</button>
+        </div>
+      </div>
+    </div>
+    <div id="share-existing-list" class="share-existing-list hidden">
+      <p class="share-hint">Shared with:</p>
+      <div id="share-existing-items"></div>
+    </div>
+  </div>
+
+  <div id="move-picker-modal" class="modal-content hidden">
+    <h3>Move to folder</h3>
+    <div class="move-picker-root-option">
+      <label><input type="radio" name="move-dest" class="move-root-radio" value="root"> 🏠 My Drive (root)</label>
+    </div>
+    <div class="move-picker-tree"></div>
+    <p class="move-picker-hint">Selected: <span class="move-picker-label">—</span></p>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" onclick="DriveUI.closeModal()">Cancel</button>
+      <button type="button" class="btn btn-primary move-picker-confirm">Move here</button>
+    </div>
+  </div>
+
+</div>

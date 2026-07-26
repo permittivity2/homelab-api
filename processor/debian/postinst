@@ -1,0 +1,115 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_FILE=/etc/homelab/processor/config.yml
+API_CONFIG_FILE=/etc/homelab/api/config.yml
+
+case "$1" in
+    configure)
+        echo "Homelab Drive Task Processor post-installation setup..."
+
+        if ! getent group homelab > /dev/null 2>&1; then
+            groupadd -f homelab || true
+        fi
+        if ! id -u homelab > /dev/null 2>&1; then
+            useradd -r -g homelab -d /var/lib/homelab -s /usr/sbin/nologin homelab || true
+        fi
+
+        if [ ! -d /var/lib/homelab ]; then
+            mkdir -p /var/lib/homelab
+            chown homelab:homelab /var/lib/homelab
+            chmod 750 /var/lib/homelab
+        fi
+
+        mkdir -p /etc/homelab/processor
+        chown homelab:homelab /etc/homelab/processor
+        chmod 750 /etc/homelab/processor
+
+        if [ ! -f "$CONFIG_FILE" ]; then
+            REUSE=false
+            if [ -f "$API_CONFIG_FILE" ]; then
+                db_get homelab-api-backend-processor/db/reuse_api_config || true
+                REUSE="${RET:-false}"
+            fi
+
+            if [ "$REUSE" = "true" ]; then
+                # homelab-api's config.yml is our own generated YAML (fixed, simple format) —
+                # safe to pull the database: block out with a small awk scan rather than a full parser.
+                DB_HOST="$(awk '/^database:/{f=1;next} f&&/^[a-z]/{f=0} f&&/host:/{print $2; exit}' "$API_CONFIG_FILE")"
+                DB_PORT="$(awk '/^database:/{f=1;next} f&&/^[a-z]/{f=0} f&&/port:/{print $2; exit}' "$API_CONFIG_FILE")"
+                DB_NAME="$(awk '/^database:/{f=1;next} f&&/^[a-z]/{f=0} f&&/name:/{print $2; exit}' "$API_CONFIG_FILE")"
+                DB_USER="$(awk '/^database:/{f=1;next} f&&/^[a-z]/{f=0} f&&/user:/{print $2; exit}' "$API_CONFIG_FILE")"
+                DB_PASS="$(awk '/^database:/{f=1;next} f&&/^[a-z]/{f=0} f&&/password:/{print $2; exit}' "$API_CONFIG_FILE")"
+                echo "Reusing database connection settings from $API_CONFIG_FILE."
+            else
+                db_get homelab-api-backend-processor/db/host || true;     DB_HOST="${RET:-localhost}"
+                db_get homelab-api-backend-processor/db/port || true;     DB_PORT="${RET:-5432}"
+                db_get homelab-api-backend-processor/db/name || true;     DB_NAME="${RET:-mailserver}"
+                db_get homelab-api-backend-processor/db/user || true;     DB_USER="${RET:-dovecot_user}"
+                db_get homelab-api-backend-processor/db/password || true; DB_PASS="$RET"
+            fi
+
+            cat > "$CONFIG_FILE" <<EOF
+# Homelab API Backend Processor Configuration — generated during package install $(date -R)
+
+# PostgreSQL Database Connection (same database as homelab-api;
+# credentials are duplicated here since this daemon connects independently)
+database:
+  host: $DB_HOST
+  port: $DB_PORT
+  name: $DB_NAME
+  user: $DB_USER
+  password: $DB_PASS
+
+# Task processor tuning
+processor:
+  max_workers: 8               # Max concurrent file workers (one per file_id)
+  poll_interval_seconds: 2     # How often to poll for new tasks
+
+# File storage (must match homelab-api's storage.drive_path)
+storage:
+  drive_path: /mnt/homelab-drive
+EOF
+            chown homelab:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "Created $CONFIG_FILE"
+
+            if command -v psql >/dev/null 2>&1; then
+                if ! PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -tAc "SELECT 1" </dev/null >/dev/null 2>&1; then
+                    echo "NOTE: could not verify database connectivity — double-check $CONFIG_FILE."
+                fi
+            fi
+        fi
+
+        systemctl daemon-reload || true
+        if systemctl is-enabled homelab-api-backend-processor > /dev/null 2>&1; then
+            systemctl restart homelab-api-backend-processor || true
+        else
+            systemctl enable homelab-api-backend-processor || true
+            systemctl start homelab-api-backend-processor || true
+        fi
+
+        db_stop
+
+        echo ""
+        echo "Homelab Drive Task Processor installed!"
+        echo ""
+        echo "Notes:"
+        echo "  - Requires NFS mount at storage.drive_path defined in config"
+        echo "  - Check status: systemctl status homelab-api-backend-processor"
+        echo "  - View logs:    journalctl -u homelab-api-backend-processor -f"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

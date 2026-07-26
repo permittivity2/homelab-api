@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 755 script/homelab-api-backend-processor \
+		debian/homelab-api-backend-processor/usr/bin/homelab-api-backend-processor
+	install -D -m 644 systemd/homelab-api-backend-processor.service \
+		debian/homelab-api-backend-processor/etc/systemd/system/homelab-api-backend-processor.service
+
+override_dh_auto_test:
+	# Skip tests during package build
+
+override_dh_auto_build:
+	# No build step needed for pure Perl

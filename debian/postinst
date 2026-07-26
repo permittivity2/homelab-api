@@ -1,0 +1,169 @@
+#!/bin/sh
+
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONFIG_FILE=/etc/homelab/api/config.yml
+MIGRATIONS_DIR=/usr/share/homelab-api/migrations
+
+case "$1" in
+    configure)
+        echo "Homelab API post-installation setup..."
+
+        if ! getent group homelab >/dev/null; then
+            addgroup --system homelab
+        fi
+        if ! getent passwd homelab >/dev/null; then
+            adduser --system --ingroup homelab --home /var/lib/homelab \
+                --no-create-home --shell /usr/sbin/nologin homelab
+        fi
+
+        mkdir -p /etc/homelab/api
+        chown homelab:homelab /etc/homelab/api
+        chmod 750 /etc/homelab/api
+
+        mkdir -p /var/lib/homelab
+        chown homelab:homelab /var/lib/homelab
+        chmod 750 /var/lib/homelab
+
+        FIRST_INSTALL=0
+        if [ ! -f "$CONFIG_FILE" ]; then
+            FIRST_INSTALL=1
+
+            db_get homelab-api/db/host || true;         DB_HOST="${RET:-localhost}"
+            db_get homelab-api/db/port || true;         DB_PORT="${RET:-5432}"
+            db_get homelab-api/db/name || true;         DB_NAME="${RET:-mailserver}"
+            db_get homelab-api/db/user || true;         DB_USER="${RET:-dovecot_user}"
+            db_get homelab-api/db/password || true;     DB_PASS="$RET"
+            db_get homelab-api/db/install_local || true; INSTALL_LOCAL="${RET:-false}"
+
+            if [ "$INSTALL_LOCAL" = "true" ]; then
+                # Debian policy forbids invoking apt/dpkg from maintainer scripts (the outer
+                # dpkg run already holds the lock this process would need). homelab-api
+                # Recommends: postgresql instead, so apt installs it in the same transaction;
+                # here we just detect and configure whatever's already present.
+                if ! command -v psql >/dev/null 2>&1 || ! systemctl list-unit-files postgresql.service >/dev/null 2>&1; then
+                    echo "NOTE: PostgreSQL isn't installed on this machine yet."
+                    echo "      Run 'sudo apt install postgresql', then 'sudo dpkg-reconfigure homelab-api'"
+                    echo "      to finish local database setup, or edit $CONFIG_FILE by hand."
+                    INSTALL_LOCAL="false"
+                else
+                    echo "Configuring the local PostgreSQL server..."
+                    systemctl enable --now postgresql || true
+                    DB_HOST="localhost"
+                fi
+            fi
+
+            if [ "$INSTALL_LOCAL" = "true" ]; then
+                if [ -z "$DB_PASS" ]; then
+                    DB_PASS="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+                fi
+
+                sudo -u postgres psql -w -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 \
+                    || sudo -u postgres psql -w -c "CREATE ROLE $DB_USER WITH LOGIN PASSWORD '$DB_PASS';"
+                sudo -u postgres psql -w -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" | grep -q 1 \
+                    || sudo -u postgres psql -w -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+                sudo -u postgres psql -w -d "$DB_NAME" -c "CREATE SCHEMA IF NOT EXISTS dovecot AUTHORIZATION $DB_USER;"
+                sudo -u postgres psql -w -d "$DB_NAME" -c "CREATE TABLE IF NOT EXISTS dovecot.users (
+                        id SERIAL PRIMARY KEY,
+                        username VARCHAR NOT NULL,
+                        domain VARCHAR NOT NULL,
+                        password VARCHAR NOT NULL,
+                        active CHAR(1) NOT NULL DEFAULT 'Y',
+                        quota_mb INT DEFAULT 1024,
+                        UNIQUE(username, domain)
+                    );"
+                sudo -u postgres psql -w -d "$DB_NAME" -c "GRANT ALL ON ALL TABLES IN SCHEMA dovecot TO $DB_USER;
+                    GRANT ALL ON ALL SEQUENCES IN SCHEMA dovecot TO $DB_USER;"
+
+                echo "Local PostgreSQL ready: database=$DB_NAME, user=$DB_USER."
+                echo "NOTE: dovecot.users was created empty — this machine is not running a"
+                echo "      real Dovecot mail server. Add rows there yourself, or later point"
+                echo "      DB_HOST at a real mail server's PostgreSQL instance instead."
+            fi
+
+            JWT_SECRET="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64)"
+
+            cat > "$CONFIG_FILE" <<EOF
+# Homelab API Configuration — generated during package install $(date -R)
+database:
+  host: $DB_HOST
+  port: $DB_PORT
+  name: $DB_NAME
+  user: $DB_USER
+  password: $DB_PASS
+
+jwt:
+  secret: $JWT_SECRET
+  algorithm: HS256
+  expiry_seconds: 3600
+  refresh_expiry_seconds: 2592000
+
+server:
+  host: 0.0.0.0
+  port: 3000
+  workers: 2
+
+logging:
+  level: info
+  format: json
+
+storage:
+  drive_path: /mnt/homelab-drive
+  max_file_size_mb: 10240
+  max_concurrent_uploads: 4
+EOF
+            chown homelab:homelab "$CONFIG_FILE"
+            chmod 640 "$CONFIG_FILE"
+            echo "Created $CONFIG_FILE"
+
+            if [ "$INSTALL_LOCAL" != "true" ]; then
+                echo "NOTE: could not verify database connectivity during install."
+                echo "      Double-check $CONFIG_FILE and 'systemctl restart homelab-api' once fixed."
+            fi
+
+            # Apply this package's own schema (api.*, drive.*) — idempotent (CREATE ... IF NOT EXISTS).
+            # Not run against dovecot.users, which is owned by the mail server, not this package.
+            if command -v psql >/dev/null 2>&1 && [ -d "$MIGRATIONS_DIR" ]; then
+                echo "Applying database schema migrations..."
+                for f in "$MIGRATIONS_DIR"/*.sql; do
+                    [ -f "$f" ] || continue
+                    if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                            -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>&1; then
+                        echo "  applied $(basename "$f")"
+                    else
+                        echo "  WARNING: failed to apply $(basename "$f") — check connectivity/permissions and re-run by hand."
+                    fi
+                done
+            fi
+        fi
+
+        if systemctl is-enabled homelab-api >/dev/null 2>&1; then
+            systemctl restart homelab-api || systemctl start homelab-api
+        else
+            systemctl enable homelab-api
+            systemctl start homelab-api || true
+        fi
+
+        db_stop
+
+        echo ""
+        echo "Homelab API installed successfully!"
+        if [ "$FIRST_INSTALL" -eq 1 ]; then
+            echo "Config: $CONFIG_FILE"
+        fi
+        echo "Check status: systemctl status homelab-api"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

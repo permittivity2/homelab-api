@@ -1,0 +1,9 @@
+<nav class="breadcrumb">
+  <a href="javascript:void(0)" onclick="DriveUI.navigate(null)" class="crumb-root">My Drive</a>
+  % for my $crumb (@{$breadcrumb // []}) {
+    <span class="crumb-sep">/</span>
+    <a href="javascript:void(0)" onclick="DriveUI.navigate(<%= $crumb->{id} %>)" class="crumb-item">
+      <%= $crumb->{name} %>
+    </a>
+  % }
+</nav>

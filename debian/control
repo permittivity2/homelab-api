@@ -1,0 +1,28 @@
+Source: homelab-api
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-api
+Architecture: all
+Pre-Depends: debconf (>= 0.5) | debconf-2.0
+Depends: perl (>= 5.40),
+         libmojolicious-perl,
+         libmojo-pg-perl,
+         libcrypt-jwt-perl,
+         libcrypt-argon2-perl,
+         libjson-xs-perl,
+         libdatetime-perl,
+         libyaml-libyaml-perl,
+         postgresql-client,
+         adduser
+Recommends: postgresql
+Description: Unified REST API backend for Homelab ecosystem
+ Homelab API is the unified REST API backend powering the Homelab
+ ecosystem. It provides endpoints for authentication, file storage, messaging,
+ and social features.
+ .
+ Current phase: Authentication API (v0.1 beta)

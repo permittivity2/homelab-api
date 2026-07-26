@@ -1,0 +1,23 @@
+[Unit]
+Description=Homelab Drive Web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_DRIVE_WEB_UI_CONFIG=/etc/homelab/drive-web-ui/drive-ui.yml"
+Environment="HOMELAB_DRIVE_WEB_UI_HOME=/usr/share/homelab-drive-web-ui"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-drive-web-ui
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-drive-web-ui
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-drive-web-ui
+
+[Install]
+WantedBy=multi-user.target

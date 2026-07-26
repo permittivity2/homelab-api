@@ -1,0 +1,53 @@
+% layout 'default';
+% title 'Shared with me';
+<div class="file-browser">
+  <div class="browser-toolbar">
+    <h2 class="page-title">Shared with me</h2>
+  </div>
+
+  % my $shares = stash('shares') // [];
+  % if (@$shares) {
+    <div class="drop-zone">
+      <table class="file-table">
+        <thead>
+          <tr>
+            <th class="col-name">Name</th>
+            <th class="col-type">Type</th>
+            <th class="col-size">Size</th>
+            <th class="col-date">Shared by</th>
+            <th class="col-date">Date</th>
+            <th class="col-actions"></th>
+          </tr>
+        </thead>
+        <tbody>
+          % for my $s (@$shares) {
+            <tr class="file-row">
+              <td class="col-name">
+                % if ($s->{share_type} eq 'dir') {
+                  <span>📁 <a href="/s/<%= $s->{share_token} %>"><%= $s->{target_name} %></a></span>
+                % } else {
+                  <span>📄 <a href="/s/<%= $s->{share_token} %>/download"><%= $s->{target_name} %></a></span>
+                % }
+              </td>
+              <td class="col-type"><%= $s->{share_type} eq 'dir' ? 'Folder' : ($s->{mime_type} // '—') %></td>
+              <td class="col-size"><%= $s->{share_type} eq 'file' ? format_size($s->{file_size}) : '—' %></td>
+              <td class="col-date"><%= $s->{owner_email} // '—' %></td>
+              <td class="col-date"><%= $s->{created_at} // '—' %></td>
+              <td class="col-actions">
+                % if ($s->{share_type} eq 'file') {
+                  <a href="/s/<%= $s->{share_token} %>/download" class="btn btn-sm btn-secondary">Download</a>
+                % } else {
+                  <a href="/s/<%= $s->{share_token} %>" class="btn btn-sm btn-secondary">Browse</a>
+                % }
+              </td>
+            </tr>
+          % }
+        </tbody>
+      </table>
+    </div>
+  % } else {
+    <div class="empty-state">
+      <p>Nothing has been shared with you yet.</p>
+    </div>
+  % }
+</div>

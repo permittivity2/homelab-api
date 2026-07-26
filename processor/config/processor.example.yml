@@ -1,0 +1,23 @@
+# Homelab API Backend Processor Configuration
+# Copy this file to /etc/homelab/processor/config.yml and edit with production values.
+#
+# This daemon connects to PostgreSQL independently of homelab-api, so the
+# database credentials must be set here too (they are not shared/inherited
+# from homelab-api's config file).
+
+# PostgreSQL Database Connection
+database:
+  host: YOUR_DB_HOST
+  port: 5432
+  name: mailserver
+  user: dovecot_user
+  password: YOUR_DB_PASSWORD_HERE
+
+# Task processor tuning
+processor:
+  max_workers: 8               # Max concurrent file workers (one per file_id)
+  poll_interval_seconds: 2     # How often to poll for new tasks
+
+# File Storage — must match homelab-api's storage.drive_path (same NFS mount)
+storage:
+  drive_path: /mnt/homelab-drive

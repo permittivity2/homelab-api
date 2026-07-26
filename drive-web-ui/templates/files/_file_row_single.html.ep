@@ -1,0 +1,27 @@
+% my $f     = stash('file');
+% my $tasks  = $f->{tasks}  // [];
+% my $status = $f->{status} // 'active';
+<tr class="file-row" id="file-<%= $f->{id} %>" data-id="<%= $f->{id} %>" data-type="file">
+  <td class="col-name">
+    <span class="file-icon icon-<%= file_icon($f->{mime_type}) %>">📄</span>
+    <a href="/drive/download/<%= $f->{id} %>" class="file-name" download>
+      <%= $f->{name} %>
+    </a>
+  </td>
+  <td class="col-size"><%= format_size($f->{file_size}) %></td>
+  <td class="col-date"><%= format_date($f->{created_at}) %></td>
+  <td class="col-status">
+    % if ($status eq 'jailed') {
+      <span class="badge badge-error">Error</span>
+    % } elsif (@$tasks) {
+      <span class="badge badge-warning">Processing</span>
+    % } else {
+      <span class="badge badge-ok">OK</span>
+    % }
+  </td>
+  <td class="col-actions">
+    <div class="action-menu">
+      <button class="action-btn" data-id="<%= $f->{id} %>" data-name="<%= $f->{name} %>" data-type="file" onclick="DriveUI.showActions(event, this)">⋯</button>
+    </div>
+  </td>
+</tr>

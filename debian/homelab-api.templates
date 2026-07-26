@@ -1,0 +1,52 @@
+Template: homelab-api/db/host
+Type: string
+Default: localhost
+Description: PostgreSQL database host:
+ Enter the hostname or IP address of the PostgreSQL server homelab-api
+ should use for authentication (it reads a dovecot.users table) and its
+ own api.* schema.
+ .
+ If you don't have an existing PostgreSQL server, leave this as
+ "localhost" — if connectivity fails you will be offered the option to
+ install and configure one automatically on this machine.
+
+Template: homelab-api/db/port
+Type: string
+Default: 5432
+Description: PostgreSQL database port:
+
+Template: homelab-api/db/name
+Type: string
+Default: mailserver
+Description: PostgreSQL database name:
+
+Template: homelab-api/db/user
+Type: string
+Default: dovecot_user
+Description: PostgreSQL database username:
+
+Template: homelab-api/db/password
+Type: password
+Description: PostgreSQL database password:
+ Enter the password for the above database user.
+
+Template: homelab-api/db/connect_failed
+Type: note
+Description: Could not connect to the specified database
+ homelab-api could not connect to PostgreSQL using the connection
+ details you provided. You can continue and let this installer set up
+ a local PostgreSQL server instead, or decline and fix
+ /etc/homelab/api/config.yml by hand afterward.
+
+Template: homelab-api/db/install_local
+Type: boolean
+Default: true
+Description: Configure a local PostgreSQL server?
+ homelab-api could not reach a PostgreSQL server at the address you
+ provided. If the postgresql package is installed (or gets installed
+ alongside homelab-api, which Recommends it), automatically create the
+ database, role, schema, and a demo dovecot.users table homelab-api
+ needs to run standalone?
+ .
+ Decline this if you plan to point homelab-api at an existing mail
+ server's PostgreSQL database later and will configure it by hand.

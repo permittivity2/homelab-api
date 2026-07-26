@@ -1,0 +1,14 @@
+<div class="modal-content">
+  <h3><%= stash('title') // 'Confirm' %></h3>
+  <p><%= stash('message') // 'Are you sure?' %></p>
+  <div class="form-actions">
+    <button class="btn btn-ghost" onclick="DriveUI.closeModal()">Cancel</button>
+    <button class="btn btn-danger"
+      hx-<%= stash('method') // 'delete' %>="<%= stash('url') %>"
+      hx-target="<%= stash('target') // 'body' %>"
+      hx-swap="<%= stash('swap') // 'none' %>"
+      hx-on::after-request="DriveUI.closeModal()">
+      <%= stash('confirm_label') // 'Delete' %>
+    </button>
+  </div>
+</div>

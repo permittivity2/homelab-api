@@ -1,0 +1,18 @@
+Source: homelab-drive-web-ui
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-drive-web-ui
+Architecture: all
+Depends: perl (>= 5.36),
+         libmojolicious-perl,
+         libyaml-libyaml-perl
+Description: Web interface for Homelab Drive
+ A Mojolicious web application providing a browser-based interface to the
+ Homelab Drive file storage service. Serves at drive.example.com,
+ proxying API calls to api.example.com. Supports htmx-driven file
+ browsing, drag-and-drop upload, folder navigation, and file management.

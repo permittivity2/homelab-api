@@ -1,0 +1,31 @@
+# Homelab Drive Web UI Configuration
+#
+# IMPORTANT: If you run more than one instance of this service behind a
+# load balancer, all instances must have identical values for 'secrets'.
+# Sessions are signed cookies; a mismatched secret causes all sessions
+# created by another instance to be rejected.
+
+api:
+  base_url: https://api.example.com
+
+# Bump this string on every deploy to bust browser caches for app.js and style.css
+asset_version: "45"
+
+# Session signing secrets — CHANGE THIS, keep identical across all drive servers
+secrets:
+  - "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+
+session:
+  secure: 1         # Set to 0 only for local HTTP development
+  expiry: 604800    # 7 days in seconds
+
+upload:
+  # Temp directory for incoming uploads before they are forwarded to api.example.com.
+  # Must have at least 10GB free. Defaults to system /tmp if unset.
+  tmpdir:   /var/lib/homelab/tmp
+  max_size: 10737418240   # 10GB in bytes
+
+server:
+  listen:   "http://0.0.0.0:2500"
+  workers:  4
+  pid_file: /var/lib/homelab/drive-ui-hypnotoad.pid
