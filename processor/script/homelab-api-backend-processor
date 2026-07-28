@@ -429,13 +429,10 @@ $SIG{CHLD} = 'DEFAULT';  # use waitpid instead
 
 log_info("Homelab Drive Task Processor starting (max_workers=$MAX_WORKERS, poll=${POLL_INTERVAL}s)");
 
-# my $dbh = db_connect();
-log_info("Database connected: $db_cfg->{host}/$db_cfg->{name}");
-
-while ($running) {
+MAINWHILE: while ($running) {
     my $dbh = eval { db_connect() };
     if (!$dbh) {
-      log_error("DB connect failed this cycle: $@");
+        log_error("DB connect failed this cycle: $@");
         sleep $POLL_INTERVAL;
         next;
     }
@@ -459,29 +456,43 @@ while ($running) {
         push @bind, \@active_file_ids if @active_file_ids;
         push @bind, $slots;
 
-        my $rows = $dbh->selectall_arrayref(
-            qq{SELECT DISTINCT ON (file_id) file_id
-               FROM api.drive_files_tasks
-               WHERE completed = FALSE
-                 AND retry_count < ?
-                 AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))
-                 $exclude_sql
-               ORDER BY file_id, inserted_at
-               LIMIT ?},
-            { Slice => {} }, @bind
-        );
+        my $rows = eval {
+            $dbh->selectall_arrayref(
+                qq{SELECT DISTINCT ON (file_id) file_id
+                   FROM api.drive_files_tasks
+                   WHERE completed = FALSE
+                     AND retry_count < ?
+                     AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))
+                     $exclude_sql
+                   ORDER BY file_id, inserted_at
+                   LIMIT ?},
+                { Slice => {} }, @bind
+            );
+        };
+        if (!$rows) {
+            log_error("Claim query failed (possible stale connection): $@");
+            sleep $POLL_INTERVAL;
+            next;
+        }
 
         for my $row (@$rows) {
             my $file_id = $row->{file_id};
 
             # Claim all pending tasks for this file_id
-            $dbh->do(
-                q{UPDATE api.drive_files_tasks
-                  SET started_at = NOW(), worker_id = ?, status_text = 'claimed'
-                  WHERE file_id = ? AND completed = FALSE AND retry_count < ?
-                    AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))},
-                {}, $WORKER_ID, $file_id, $MAX_RETRIES, $STALE_MINUTES
-            );
+            my $claimed = eval {
+                $dbh->do(
+                    q{UPDATE api.drive_files_tasks
+                      SET started_at = NOW(), worker_id = ?, status_text = 'claimed'
+                      WHERE file_id = ? AND completed = FALSE AND retry_count < ?
+                        AND (started_at IS NULL OR started_at < NOW() - (? * INTERVAL '1 minute'))},
+                    {}, $WORKER_ID, $file_id, $MAX_RETRIES, $STALE_MINUTES
+                );
+            };
+            if (!defined $claimed) {
+                log_error("Claim update failed for file_id=$file_id (possible stale connection): $@");
+                sleep $POLL_INTERVAL;
+                next MAINWHILE;
+            }
 
             my $pid = fork();
             die "fork() failed: $!\n" unless defined $pid;
@@ -515,6 +526,5 @@ while (%active_pids) {
     }
 }
 
-# $dbh->disconnect;
 log_info("Homelab Drive Task Processor stopped");
 exit 0;
