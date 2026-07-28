@@ -1,3 +1,9 @@
+homelab-api-backend-processor (0.1.1) unstable; urgency=medium
+
+  * Release v0.1.1
+
+ -- Gardner <gardner@homelab>  Mon, 27 Jul 2026 20:14:47 -0500
+
 homelab-api-backend-processor (0.1.0) unstable; urgency=medium
 
   * Initial public release.

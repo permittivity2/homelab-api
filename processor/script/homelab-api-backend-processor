@@ -429,10 +429,16 @@ $SIG{CHLD} = 'DEFAULT';  # use waitpid instead
 
 log_info("Homelab Drive Task Processor starting (max_workers=$MAX_WORKERS, poll=${POLL_INTERVAL}s)");
 
-my $dbh = db_connect();
+# my $dbh = db_connect();
 log_info("Database connected: $db_cfg->{host}/$db_cfg->{name}");
 
 while ($running) {
+    my $dbh = eval { db_connect() };
+    if (!$dbh) {
+      log_error("DB connect failed this cycle: $@");
+        sleep $POLL_INTERVAL;
+        next;
+    }
     # Reap finished children
     while ((my $pid = waitpid(-1, WNOHANG)) > 0) {
         my $fid = delete $active_pids{$pid};
@@ -495,6 +501,7 @@ while ($running) {
         }
     }
 
+    $dbh->disconnect;
     sleep $POLL_INTERVAL;
 }
 
@@ -508,6 +515,6 @@ while (%active_pids) {
     }
 }
 
-$dbh->disconnect;
+# $dbh->disconnect;
 log_info("Homelab Drive Task Processor stopped");
 exit 0;
