@@ -2,6 +2,12 @@
 const DriveUI = (() => {
   let currentDirId = null;
 
+  // Image lightbox state
+  let _lbImages = [];   // [{id, name}] snapshot for current folder, taken at open
+  let _lbIndex = -1;
+  let _lbTimer = null;  // slideshow setInterval handle
+  let _lbSeconds = 4;   // current interval; 0 = off
+
   // --- jsTree: sidebar folder tree ---
 
   function initTree(activeDirId) {
@@ -187,6 +193,7 @@ const DriveUI = (() => {
   }
 
   function navigate(dirId) {
+    closeLightbox();
     currentDirId = dirId;
     const browsePath = dirId != null ? `/drive?dir_id=${dirId}` : '/drive';
 
@@ -206,6 +213,7 @@ const DriveUI = (() => {
   }
 
   window.addEventListener('popstate', (e) => {
+    closeLightbox();
     if (location.hash) {
       history.replaceState(e.state, '', location.pathname + location.search);
       return;
@@ -1103,8 +1111,206 @@ const DriveUI = (() => {
     document.getElementById('video-modal')?.classList.add('hidden');
   }
 
+  // --- Image Lightbox ---
+
+  function _currentFolderImages() {
+    return [...document.querySelectorAll('#file-tbody .file-row[data-type="file"]')]
+      .filter(row => /^image\//.test(row.querySelector('.col-type')?.dataset.val || ''))
+      .map(row => ({
+        id:   parseInt(row.dataset.id, 10),
+        name: row.querySelector('.col-name')?.dataset.val || '',
+      }));
+  }
+
+  // Session-scoped image cache: id -> { url: objectURL, dirId }.
+  // Map insertion order doubles as LRU order (re-inserting on access = MRU).
+  const LB_CACHE_MAX = 15;
+  const _lbCache = new Map();
+  const _lbInflight = new Map();  // id -> in-flight fetch Promise, avoids duplicate requests
+
+  function _lbCacheEvictOldest() {
+    while (_lbCache.size > LB_CACHE_MAX) {
+      const oldestId = _lbCache.keys().next().value;
+      URL.revokeObjectURL(_lbCache.get(oldestId).url);
+      _lbCache.delete(oldestId);
+    }
+  }
+
+  function _prefetchImage(id) {
+    if (_lbCache.has(id) || _lbInflight.has(id)) return;
+    const dirId = _currentDir();
+    const p = fetch(`/drive/download/${id}`, { credentials: 'same-origin' })
+      .then(r => r.ok ? r.blob() : Promise.reject())
+      .then(blob => {
+        _lbCache.set(id, { url: URL.createObjectURL(blob), dirId });
+        _lbCacheEvictOldest();
+      })
+      .catch(() => {})
+      .finally(() => _lbInflight.delete(id));
+    _lbInflight.set(id, p);
+  }
+
+  function _prefetchNeighbors() {
+    if (_lbImages.length <= 1) return;
+    [1, 2, -1].forEach(offset => {
+      const target = _lbImages[(_lbIndex + offset + _lbImages.length) % _lbImages.length];
+      if (target) _prefetchImage(target.id);
+    });
+  }
+
+  // Evict cache entries for images no longer in the folder currently being viewed
+  // (deleted/moved/trashed). Scoped to the visible folder's dirId so it never
+  // touches cache entries belonging to a different folder the user isn't viewing.
+  document.body.addEventListener('fileListChanged', () => {
+    if (!_lbCache.size) return;
+    const curDir   = _currentDir();
+    const validIds = new Set(_currentFolderImages().map(f => f.id));
+    for (const [id, entry] of _lbCache) {
+      if (entry.dirId === curDir && !validIds.has(id)) {
+        URL.revokeObjectURL(entry.url);
+        _lbCache.delete(id);
+      }
+    }
+  });
+
+  function openLightbox(id, event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    _lbImages = _currentFolderImages();
+    _lbIndex = _lbImages.findIndex(f => f.id === id);
+    if (_lbIndex < 0) return false;
+    _showLightboxImage();
+    document.getElementById('lightbox')?.classList.remove('hidden');
+    _startSlideshow();
+    return false;
+  }
+
+  function _showLightboxImage() {
+    const img = _lbImages[_lbIndex];
+    if (!img) return;
+    const downloadUrl = `/drive/download/${img.id}`;
+    const image    = document.getElementById('lightbox-image');
+    const download = document.getElementById('lightbox-download');
+    const caption  = document.getElementById('lightbox-caption');
+    const counter  = document.getElementById('lightbox-counter');
+
+    if (image) {
+      const cached = _lbCache.get(img.id);
+      if (cached) {
+        // Bump to most-recently-used position.
+        _lbCache.delete(img.id);
+        _lbCache.set(img.id, cached);
+        image.src = cached.url;
+      } else {
+        image.src = downloadUrl;
+        _prefetchImage(img.id);  // cache it now so revisiting is instant later
+      }
+    }
+    // Download link/button always hits the real endpoint, never a cached blob URL.
+    if (download) { download.href = downloadUrl; download.download = img.name; }
+    if (caption)  caption.textContent = img.name;
+    if (counter)  counter.textContent = `${_lbIndex + 1} / ${_lbImages.length}`;
+
+    const multi = _lbImages.length > 1;
+    document.querySelectorAll('.lightbox-nav').forEach(b => b.classList.toggle('hidden', !multi));
+    const playBtn = document.getElementById('lightbox-play');
+    if (playBtn) playBtn.disabled = !multi;
+    document.querySelectorAll('.lightbox-speed button').forEach(b => b.disabled = !multi);
+
+    _prefetchNeighbors();
+  }
+
+  function closeLightbox() {
+    _stopSlideshow();
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    document.getElementById('lightbox')?.classList.add('hidden');
+    const image = document.getElementById('lightbox-image');
+    if (image) image.src = '';
+  }
+
+  function lightboxNext() {
+    if (!_lbImages.length) return;
+    _lbIndex = (_lbIndex + 1) % _lbImages.length;
+    _showLightboxImage();
+    _restartSlideshowIfRunning();
+  }
+
+  function lightboxPrev() {
+    if (!_lbImages.length) return;
+    _lbIndex = (_lbIndex - 1 + _lbImages.length) % _lbImages.length;
+    _showLightboxImage();
+    _restartSlideshowIfRunning();
+  }
+
+  function _updateLightboxPlayGlyph() {
+    const playBtn = document.getElementById('lightbox-play');
+    if (playBtn) playBtn.textContent = _lbTimer ? '⏸' : '⏵';
+  }
+
+  function toggleSlideshow() {
+    if (_lbTimer) _stopSlideshow();
+    else _startSlideshow();
+  }
+
+  function _startSlideshow() {
+    if (_lbSeconds <= 0 || _lbImages.length <= 1) return;
+    _lbTimer = setInterval(lightboxNext, _lbSeconds * 1000);
+    _updateLightboxPlayGlyph();
+  }
+
+  function _stopSlideshow() {
+    clearInterval(_lbTimer);
+    _lbTimer = null;
+    _updateLightboxPlayGlyph();
+  }
+
+  function _restartSlideshowIfRunning() {
+    if (_lbTimer) { _stopSlideshow(); _startSlideshow(); }
+  }
+
+  function setSlideshowInterval(secs) {
+    _lbSeconds = secs;
+    document.querySelectorAll('.lightbox-speed button').forEach(b => {
+      b.classList.toggle('active', +b.dataset.secs === secs);
+    });
+    if (secs === 0) _stopSlideshow();
+    else _restartSlideshowIfRunning();
+  }
+
+  function downloadCurrentLightboxImage() {
+    document.getElementById('lightbox-download')?.click();
+  }
+
+  function toggleLightboxFullscreen() {
+    const el = document.querySelector('.lightbox-content');
+    if (!el) return;
+    if (!document.fullscreenElement) el.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  }
+
+  document.getElementById('lightbox-image')?.addEventListener('click', (e) => {
+    if (!window.matchMedia('(hover: hover)').matches) {
+      e.currentTarget.closest('.lightbox-content')?.classList.toggle('controls-visible');
+    }
+  });
+
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeVideo();
+    if (e.key === 'Escape') { closeVideo(); closeLightbox(); return; }
+    const lb = document.getElementById('lightbox');
+    if (!lb || lb.classList.contains('hidden')) return;
+    if (e.target.matches('input, textarea')) return;
+    switch (e.key) {
+      case ' ': case 'p': case 'P': e.preventDefault(); toggleSlideshow(); break;
+      case 'd': case 'D': downloadCurrentLightboxImage(); break;
+      case 'ArrowLeft':  lightboxPrev(); break;
+      case 'ArrowRight': lightboxNext(); break;
+      case 'Home': _lbIndex = 0; _showLightboxImage(); _restartSlideshowIfRunning(); break;
+      case 'End':  _lbIndex = _lbImages.length - 1; _showLightboxImage(); _restartSlideshowIfRunning(); break;
+      case 'f': case 'F': toggleLightboxFullscreen(); break;
+      default:
+        if (e.key >= '1' && e.key <= '9') setSlideshowInterval(+e.key);
+        else if (e.key === '0') setSlideshowInterval(0);
+    }
   });
 
   // --- Init ---
@@ -1155,6 +1361,14 @@ const DriveUI = (() => {
     revokeShare,
     playVideo,
     closeVideo,
+    openLightbox,
+    closeLightbox,
+    lightboxPrev,
+    lightboxNext,
+    toggleSlideshow,
+    setSlideshowInterval,
+    toggleLightboxFullscreen,
+    downloadCurrentLightboxImage,
     toggleSelect,
     toggleSelectAll,
     onRowCheck,

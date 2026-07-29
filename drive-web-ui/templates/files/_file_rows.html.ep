@@ -63,12 +63,17 @@
   <td class="col-name" data-val="<%= $f->{name} %>">
     % if ($mime =~ m{^image/}) {
     <img src="/drive/thumbnail/<%= $f->{id} %>" class="file-thumb" loading="lazy"
-         onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex'">
-    <span class="file-icon icon-img" style="display:none">🖼️</span>
+         onerror="this.style.display='none';this.nextElementSibling.style.display='inline-flex'"
+         onclick="return DriveUI.openLightbox(<%= $f->{id} %>, event)">
+    <span class="file-icon icon-img" style="display:none" onclick="return DriveUI.openLightbox(<%= $f->{id} %>, event)">🖼️</span>
     % } else {
     <span class="file-icon icon-<%= $_icon %>"><%= $_emoji{$_icon} // '📄' %></span>
     % }
-    <a href="/drive/download/<%= $f->{id} %>" class="file-name" download="<%= $f->{name} %>">
+    <a href="/drive/download/<%= $f->{id} %>" class="file-name" download="<%= $f->{name} %>"
+       % if ($mime =~ m{^image/}) {
+       onclick="return DriveUI.openLightbox(<%= $f->{id} %>, event)"
+       % }
+    >
       <%= $f->{name} %>
     </a>
     % if ($mime =~ m{^video/}) {

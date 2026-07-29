@@ -93,6 +93,31 @@
   </div>
 </div>
 
+<div id="lightbox" class="lightbox hidden">
+  <div class="lightbox-backdrop" onclick="DriveUI.closeLightbox()"></div>
+  <div class="lightbox-content">
+    <button class="lightbox-nav lightbox-prev" onclick="DriveUI.lightboxPrev()" aria-label="Previous">‹</button>
+    <img id="lightbox-image" class="lightbox-image" alt="">
+    <button class="lightbox-nav lightbox-next" onclick="DriveUI.lightboxNext()" aria-label="Next">›</button>
+
+    <div class="lightbox-controls">
+      <button id="lightbox-play" onclick="DriveUI.toggleSlideshow()" title="Play/Pause">⏸</button>
+      <div class="lightbox-speed">
+        <button data-secs="2"  onclick="DriveUI.setSlideshowInterval(2)">2s</button>
+        <button data-secs="4"  onclick="DriveUI.setSlideshowInterval(4)" class="active">4s</button>
+        <button data-secs="10" onclick="DriveUI.setSlideshowInterval(10)">10s</button>
+      </div>
+      <a id="lightbox-download" class="lightbox-btn" download title="Download">⬇</a>
+      <button onclick="DriveUI.toggleLightboxFullscreen()" title="Fullscreen">⛶</button>
+      <button onclick="DriveUI.closeLightbox()" title="Close">✕</button>
+    </div>
+    <div class="lightbox-info">
+      <span id="lightbox-counter"></span>
+      <span id="lightbox-caption"></span>
+    </div>
+  </div>
+</div>
+
 <div id="sidebar-overlay" onclick="DriveUI.closeSidebar()"></div>
 <script src="https://cdn.jsdelivr.net/npm/jquery@latest/dist/jquery.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jstree@latest/dist/jstree.min.js"></script>

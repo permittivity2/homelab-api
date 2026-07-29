@@ -293,6 +293,38 @@ th[data-sort]:hover { background: var(--bg); }
 .video-modal-header button:hover { color: #ccc; }
 #video-player { display: block; max-width: 90vw; max-height: calc(90vh - 40px); }
 
+/* ── Image lightbox ── */
+.lightbox { position: fixed; inset: 0; z-index: 410; display: flex; align-items: center; justify-content: center; }
+.lightbox.hidden { display: none !important; }
+.lightbox-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.9); }
+.lightbox-content { position: relative; z-index: 1; max-width: 92vw; max-height: 92vh; display: flex; align-items: center; justify-content: center; }
+.lightbox-image { max-width: 92vw; max-height: 92vh; object-fit: contain; display: block; }
+
+.lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(0,0,0,.4); color: #fff; border: none; font-size: 32px; line-height: 1; width: 48px; height: 48px; border-radius: 50%; cursor: pointer; opacity: 0; transition: opacity .15s; }
+.lightbox-content:hover .lightbox-nav,
+.lightbox-content.controls-visible .lightbox-nav { opacity: 1; }
+.lightbox-prev { left: 12px; }
+.lightbox-next { right: 12px; }
+.lightbox-nav.hidden { display: none; }
+.lightbox-nav:disabled { opacity: 0; pointer-events: none; }
+
+.lightbox-controls { position: absolute; bottom: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: linear-gradient(transparent, rgba(0,0,0,.7)); opacity: 0; transition: opacity .15s; }
+.lightbox-content:hover .lightbox-controls,
+.lightbox-content.controls-visible .lightbox-controls { opacity: 1; }
+.lightbox-controls button, .lightbox-btn { background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; padding: 4px 6px; }
+.lightbox-controls button:hover, .lightbox-btn:hover { color: #ccc; }
+.lightbox-controls button:disabled { color: #666; cursor: default; }
+.lightbox-speed { display: flex; gap: 2px; }
+.lightbox-speed button { font-size: 12px; padding: 2px 6px; border: 1px solid rgba(255,255,255,.4); border-radius: 4px; }
+.lightbox-speed button.active { background: rgba(255,255,255,.25); }
+
+.lightbox-info { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; padding: 10px 14px; background: linear-gradient(rgba(0,0,0,.7), transparent); color: #fff; font-size: 13px; opacity: 0; transition: opacity .15s; }
+.lightbox-content:hover .lightbox-info,
+.lightbox-content.controls-visible .lightbox-info { opacity: 1; }
+
+.lightbox-content:fullscreen { max-width: 100vw; max-height: 100vh; background: #000; }
+.lightbox-content:fullscreen .lightbox-image { max-width: 100vw; max-height: 100vh; }
+
 /* ── Move picker modal ── */
 /* ── Move results dialog ── */
 .move-results-summary { margin-bottom: 10px; font-size: 14px; }
@@ -480,5 +512,14 @@ th[data-sort]:hover { background: var(--bg); }
 
 /* ── Banner: slightly smaller on mobile ── */
 .mobile .alpha-banner { font-size: 11px; }
+
+/* ── Image lightbox (mobile/tablet): no hover on touch, so controls stay visible ── */
+.mobile .lightbox-controls, .tablet .lightbox-controls,
+.mobile .lightbox-info, .tablet .lightbox-info,
+.mobile .lightbox-nav, .tablet .lightbox-nav { opacity: 1; }
+.mobile .lightbox-nav, .tablet .lightbox-nav { width: 44px; height: 44px; font-size: 26px; }
+.mobile .lightbox-controls button, .tablet .lightbox-controls button,
+.mobile .lightbox-btn, .tablet .lightbox-btn { min-width: 44px; min-height: 44px; }
+.mobile .lightbox-info { font-size: 11px; }
 
 /* Standard for new features: add .mobile and .tablet rules here */
