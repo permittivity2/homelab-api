@@ -86,6 +86,7 @@ sub upload ($c) {
 
     unless ($upload) {
         return $c->render(
+            status   => 400,
             template => 'files/_upload_result',
             layout   => undef,
             success  => 0,
@@ -96,7 +97,7 @@ sub upload ($c) {
 
     my %form = (
         file => {
-            file     => $upload->asset->path,
+            file     => $upload->asset,
             filename => $upload->filename,
             'Content-Type' => $upload->headers->content_type // 'application/octet-stream',
         },
@@ -111,6 +112,7 @@ sub upload ($c) {
     }
 
     $c->render(
+        status   => $result->{success} ? 200 : ($result->{_status} // $result->{code} // 502),
         template => 'files/_upload_result',
         layout   => undef,
         success  => $result->{success} ? 1 : 0,
