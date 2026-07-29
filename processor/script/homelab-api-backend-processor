@@ -31,6 +31,8 @@ my $stor_cfg  = $config->{storage}   // {};
 my $MAX_WORKERS    = $proc_cfg->{max_workers}           // 8;
 my $POLL_INTERVAL  = $proc_cfg->{poll_interval_seconds} // 2;
 my $DRIVE_PATH     = $stor_cfg->{drive_path}            // '/mnt/homelab-drive';
+my $SLIDE_SIZE     = $proc_cfg->{slide_show_image_size}    // '1280x1280>';
+my $SLIDE_QUALITY  = $proc_cfg->{slide_show_image_quality} // 82;
 my $MAX_RETRIES    = 3;
 my $STALE_MINUTES  = 10;
 my $CHUNK_SIZE     = 1_048_576;  # 1MB
@@ -211,6 +213,19 @@ sub execute_copy {
         'queued'
     );
 
+    # Enqueue thumbnail + slide_show_image tasks for image copies
+    # (previously copies got neither — pre-existing gap, fixed here)
+    if ($data->{mime_type} && $data->{mime_type} =~ m{^image/}) {
+        for my $t (qw(thumbnail slide_show_image)) {
+            $dbh->do(
+                'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+                {}, $new_file->{id}, $t,
+                encode_json({ version_id => $new_version->{id}, uuid => $new_uuid }),
+                'queued'
+            );
+        }
+    }
+
     log_info("Copy created new file_id=$new_file->{id} ($dest_name), sha256 task queued");
 }
 
@@ -301,6 +316,39 @@ sub execute_thumbnail {
     log_info("Thumbnail created: $thumb_path");
 }
 
+sub execute_slide_show_image {
+    my ($dbh, $task) = @_;
+
+    my $data = decode_json($task->{task_data} // '{}');
+    my $uuid = $data->{uuid} or die "No uuid in slide_show_image task_data\n";
+
+    my $file_row = $dbh->selectrow_hashref(
+        'SELECT f.user_id FROM api.drive_files f
+         JOIN api.drive_files_tasks t ON t.file_id = f.id WHERE t.id = ?',
+        {}, $task->{id}
+    ) or die "Cannot find file for slide_show_image task id=$task->{id}\n";
+    my $user_id = $file_row->{user_id};
+
+    my $src_path = disk_path($user_id, $uuid);
+    -f $src_path or die "Source image not found: $src_path\n";
+
+    my ($h1, $h2) = (substr($uuid, 0, 2), substr($uuid, 2, 2));
+    my $out_dir   = "$DRIVE_PATH/.slide_show_images/$user_id/$h1/$h2";
+    make_path($out_dir);
+    my $out_path  = "$out_dir/$uuid.jpg";
+
+    my $img = Image::Magick->new;
+    my $err = $img->Read($src_path);
+    die "Cannot read image $src_path: $err\n" if $err;
+
+    $img->Thumbnail(geometry => $SLIDE_SIZE);
+    $img->Set(quality => $SLIDE_QUALITY);
+    $err = $img->Write("jpeg:$out_path");
+    die "Cannot write slide_show_image $out_path: $err\n" if $err;
+
+    log_info("Slide-show image created: $out_path");
+}
+
 sub run_task {
     my ($dbh, $task) = @_;
 
@@ -314,6 +362,8 @@ sub run_task {
         execute_zip($dbh, $task);
     } elsif ($task->{task} eq 'thumbnail') {
         execute_thumbnail($dbh, $task);
+    } elsif ($task->{task} eq 'slide_show_image') {
+        execute_slide_show_image($dbh, $task);
     } else {
         die "Unknown task type '$task->{task}' — no handler registered\n";
     }

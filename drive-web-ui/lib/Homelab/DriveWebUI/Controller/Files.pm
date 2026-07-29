@@ -137,6 +137,22 @@ sub thumbnail ($c) {
     $c->rendered;
 }
 
+sub slide_show_image ($c) {
+    my $file_id = $c->stash('id');
+    my $meta    = $c->api->get("/api/v1/drive/files/$file_id/meta");
+    return $c->render(data => '', status => 404) unless $meta->{success};
+
+    my $file = $meta->{file};
+    my $uuid = $file->{uuid} or return $c->render(data => '', status => 404);
+    my ($h1, $h2) = (substr($uuid, 0, 2), substr($uuid, 2, 2));
+    my $path = "/drive-files/.slide_show_images/$file->{user_id}/$h1/$h2/$uuid.jpg";
+
+    $c->res->code(200);
+    $c->res->headers->content_type('image/jpeg');
+    $c->res->headers->header('X-Accel-Redirect' => $path);
+    $c->rendered;
+}
+
 sub download ($c) {
     my $file_id    = $c->stash('id');
     my $version_id = $c->param('version');

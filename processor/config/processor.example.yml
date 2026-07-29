@@ -17,6 +17,8 @@ database:
 processor:
   max_workers: 8               # Max concurrent file workers (one per file_id)
   poll_interval_seconds: 2     # How often to poll for new tasks
+  slide_show_image_size: "1280x1280>"  # Max dimensions for the slideshow-sized image derivative
+  slide_show_image_quality: 82         # JPEG quality for the slideshow-sized image derivative
 
 # File Storage — must match homelab-api's storage.drive_path (same NFS mount)
 storage:

@@ -99,6 +99,7 @@ sub startup ($self) {
     $p->get('/drive/quota')->to('files#quota_bar');
     $p->post('/drive/upload')->to('files#upload');
     $p->get('/drive/thumbnail/:id')->to('files#thumbnail');
+    $p->get('/drive/slide-show-image/:id')->to('files#slide_show_image');
     $p->get('/drive/download/:id')->to('files#download');
     $p->delete('/drive/files/:id')->to('files#delete');
     $p->patch('/drive/files/:id')->to('files#update');

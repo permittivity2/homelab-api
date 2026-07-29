@@ -157,14 +157,16 @@ sub upload {
         'queued'
     );
 
-    # Enqueue thumbnail task for image files
+    # Enqueue thumbnail + slide_show_image tasks for image files
     if ($mime && $mime =~ m{^image/}) {
-        $self->{db}->query(
-            'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
-            $file_id, 'thumbnail',
-            encode_json({ version_id => $version->{id}, uuid => $uuid }),
-            'queued'
-        );
+        for my $t (qw(thumbnail slide_show_image)) {
+            $self->{db}->query(
+                'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+                $file_id, $t,
+                encode_json({ version_id => $version->{id}, uuid => $uuid }),
+                'queued'
+            );
+        }
     }
 
     $version->{file_id} = $file_id;
@@ -503,7 +505,7 @@ sub copy_file {
     return { error => 'File not found' } unless $file;
 
     my $version = $self->{db}->query_row(
-        'SELECT id, uuid, file_size FROM api.drive_versions WHERE id = ?',
+        'SELECT id, uuid, file_size, mime_type FROM api.drive_versions WHERE id = ?',
         $file->{current_version_id}
     );
     return { error => 'File has no current version' } unless $version;
@@ -532,6 +534,7 @@ sub copy_file {
             dest_dir_id     => $dest_dir_id,
             dest_file_name  => $dest_name,
             dest_file_size  => $version->{file_size},
+            mime_type       => $version->{mime_type},
         }),
         'queued'
     );
@@ -1139,6 +1142,15 @@ sub empty_trash {
         foreach my $v (@$versions) {
             my $disk_path = $self->_disk_path($user_id, $v->{uuid});
             unlink $disk_path if -f $disk_path;
+
+            # Derivative files (thumbnail, slide_show_image) are never cleaned up
+            # otherwise — clean them up here so hard deletes don't leak them.
+            my $hex = substr($v->{uuid}, 0, 2) . '/' . substr($v->{uuid}, 2, 2);
+            for my $subdir (qw(.thumbnails .slide_show_images)) {
+                my $p = "$self->{drive_path}/$subdir/$user_id/$hex/$v->{uuid}.jpg";
+                unlink $p if -f $p;
+            }
+
             $total_bytes += $v->{file_size};
         }
     }

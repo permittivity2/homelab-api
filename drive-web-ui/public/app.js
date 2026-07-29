@@ -1139,7 +1139,11 @@ const DriveUI = (() => {
   function _prefetchImage(id) {
     if (_lbCache.has(id) || _lbInflight.has(id)) return;
     const dirId = _currentDir();
-    const p = fetch(`/drive/download/${id}`, { credentials: 'same-origin' })
+    // Try the slideshow-sized derivative first; fall back to the full-res
+    // original if it doesn't exist yet (pending/failed generation, or an
+    // image that predates this feature).
+    const p = fetch(`/drive/slide-show-image/${id}`, { credentials: 'same-origin' })
+      .then(r => r.ok ? r : fetch(`/drive/download/${id}`, { credentials: 'same-origin' }))
       .then(r => r.ok ? r.blob() : Promise.reject())
       .then(blob => {
         _lbCache.set(id, { url: URL.createObjectURL(blob), dirId });
@@ -1188,6 +1192,7 @@ const DriveUI = (() => {
   function _showLightboxImage() {
     const img = _lbImages[_lbIndex];
     if (!img) return;
+    const slideUrl    = `/drive/slide-show-image/${img.id}`;
     const downloadUrl = `/drive/download/${img.id}`;
     const image    = document.getElementById('lightbox-image');
     const download = document.getElementById('lightbox-download');
@@ -1200,9 +1205,14 @@ const DriveUI = (() => {
         // Bump to most-recently-used position.
         _lbCache.delete(img.id);
         _lbCache.set(img.id, cached);
+        image.onerror = null;
         image.src = cached.url;
       } else {
-        image.src = downloadUrl;
+        // Try the slideshow-sized derivative first; fall back to the full-res
+        // original if it doesn't exist (mirrors the thumbnail onerror fallback
+        // convention used in the file list).
+        image.onerror = () => { image.onerror = null; image.src = downloadUrl; };
+        image.src = slideUrl;
         _prefetchImage(img.id);  // cache it now so revisiting is instant later
       }
     }
