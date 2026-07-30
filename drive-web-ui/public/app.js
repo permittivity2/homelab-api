@@ -464,7 +464,6 @@ const DriveUI = (() => {
     } else {
       menu.innerHTML = `
         <button onclick="DriveUI.renameFile(${id})">Rename</button>
-        <button onclick="DriveUI.copyFile(${id})">Copy here</button>
         <button onclick="DriveUI.moveFile(${id})">Move</button>
         <a href="/drive/download/${id}" download="${escHtml(name)}">Download</a>
         <button class="danger" onclick="DriveUI.deleteFile(${id})">Trash it</button>
@@ -496,16 +495,6 @@ const DriveUI = (() => {
       target: `#file-${fileId}`,
       swap: 'outerHTML',
       values: { name },
-    });
-  }
-
-  function copyFile(fileId) {
-    closeMenus();
-    const values = {};
-    const curDir = _currentDir();
-    if (curDir != null) values.dir_id = curDir;
-    htmx.ajax('POST', `/drive/files/${fileId}/copy`, {
-      target: 'body', swap: 'none', values,
     });
   }
 
@@ -1063,24 +1052,99 @@ const DriveUI = (() => {
       const moved   = data.moved   ?? [];
       const skipped = data.skipped ?? [];
       if (skipped.length > 0) {
-        _showMoveResults(moved.length, skipped);
+        _showBulkResults('Move Results', 'moved', moved.length, skipped);
       }
     })
     .catch(e => alert(`Move error: ${e}`));
   }
 
-  function _showMoveResults(movedCount, skipped) {
+  function showCopyPicker() {
+    const { file_ids, dir_ids } = getSelectedIds();
+    if (!file_ids.length && !dir_ids.length) return;
+    _movePendingIds = { file_ids, dir_ids };
+
+    const tpl = document.getElementById('move-picker-modal');
+    if (!tpl) return;
+    showModal(tpl.innerHTML
+      .replace('<h3>Move to folder</h3>', '<h3>Copy to folder</h3>')
+      .replace('>Move here<', '>Copy here<'));
+
+    // Use the modal element as context — avoids duplicate-id collisions with the hidden template
+    const modal = document.getElementById('modal');
+    const treeEl  = $(modal).find('.move-picker-tree').first();
+    const lblEl   = modal.querySelector('.move-picker-label');
+    const confirmBtn = modal.querySelector('.move-picker-confirm');
+
+    let selectedDirId = undefined;  // undefined = nothing chosen yet
+    const rootRadio = modal.querySelector('.move-root-radio');
+
+    const updateLabel = (text) => { if (lblEl) lblEl.textContent = text; };
+
+    rootRadio?.addEventListener('change', () => {
+      selectedDirId = null;
+      treeEl.jstree(true)?.deselect_all(true);
+      updateLabel('🏠 My Drive (root)');
+    });
+
+    treeEl.jstree({
+      core: { data: { url: '/drive/tree.json' }, themes: { dots: true, icons: true } },
+      plugins: ['wholerow'],
+    })
+    .on('select_node.jstree', function(e, data) {
+      selectedDirId = parseInt(data.node.id, 10);
+      if (rootRadio) rootRadio.checked = false;
+      updateLabel(data.node.text);
+    })
+    .on('deselect_node.jstree', function() {
+      if (selectedDirId !== null) { selectedDirId = undefined; updateLabel('—'); }
+    });
+
+    confirmBtn?.addEventListener('click', () => {
+      if (selectedDirId === undefined) { alert('Please select a destination folder.'); return; }
+      const ids = _movePendingIds;
+      _movePendingIds = null;
+      closeModal();
+      _doBulkCopy(ids.file_ids, ids.dir_ids, selectedDirId);
+    });
+  }
+
+  function _doBulkCopy(file_ids, dir_ids, dir_id) {
+    fetch('/drive/bulk/copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_ids, dir_ids, dir_id }),
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success) {
+        alert(`Copy failed: ${data.error || 'Unknown error'}`);
+        return;
+      }
+      clearSelection();
+      htmx.trigger(document.body, 'fileListChanged');
+      htmx.trigger(document.body, 'treeChanged');
+
+      const queued  = data.queued  ?? [];
+      const skipped = data.skipped ?? [];
+      if (skipped.length > 0) {
+        _showBulkResults('Copy Results', 'queued', queued.length, skipped);
+      }
+    })
+    .catch(e => alert(`Copy error: ${e}`));
+  }
+
+  function _showBulkResults(title, verb, count, skipped) {
     const rows = skipped.map(f =>
       `<div class="move-result-row">
          <span class="move-result-icon">❌</span>
-         <span class="move-result-name">${escHtml(f.name)}</span>
+         <span class="move-result-name">${escHtml(f.name || 'Unknown')}</span>
          <span class="move-result-reason">${escHtml(f.reason)}</span>
        </div>`
     ).join('');
     showModal(`
-      <h3>Move Results</h3>
+      <h3>${escHtml(title)}</h3>
       <p class="move-results-summary">
-        ✅ <strong>${movedCount}</strong> moved &nbsp;|&nbsp;
+        ✅ <strong>${count}</strong> ${escHtml(verb)} &nbsp;|&nbsp;
         ❌ <strong>${skipped.length}</strong> skipped
       </p>
       <div class="move-results-list">${rows}</div>
@@ -1356,7 +1420,6 @@ const DriveUI = (() => {
     showActions,
     deleteFile,
     renameFile,
-    copyFile,
     moveFile,
     deleteDir,
     renameDir,
@@ -1388,5 +1451,6 @@ const DriveUI = (() => {
     bulkZip,
     emptyTrash,
     showMovePicker,
+    showCopyPicker,
   };
 })();

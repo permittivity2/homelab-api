@@ -22,6 +22,7 @@
     <button class="btn btn-ghost btn-sm" id="bulk-restore-btn" onclick="DriveUI.bulkRestore()" style="display:none">♻️ Restore selected</button>
     <button class="btn btn-ghost btn-sm" id="bulk-zip-btn" onclick="DriveUI.bulkZip()">🗜 Zip selected</button>
     <button class="btn btn-ghost btn-sm" onclick="DriveUI.showMovePicker()">📁 Move selected</button>
+    <button class="btn btn-ghost btn-sm" onclick="DriveUI.showCopyPicker()">📄 Copy selected</button>
     <button class="btn btn-ghost btn-sm" onclick="DriveUI.clearSelection()">✕ Clear</button>
   </div>
 

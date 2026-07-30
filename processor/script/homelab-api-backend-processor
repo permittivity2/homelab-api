@@ -174,23 +174,24 @@ sub execute_copy {
     copy($src_path, $dest_path) or die "File copy failed: $!\n";
     log_info("Copy complete for $new_uuid");
 
-    # Check for filename conflict at destination (may have appeared since task was queued)
-    my $conflict = $dbh->selectrow_hashref(
-        'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ? AND is_deleted = FALSE',
-        {}, $src_user_id, $dest_name, $dest_dir_id
-    );
-    if ($conflict) {
-        unlink $dest_path;
-        die "Destination file '$dest_name' already exists — copy aborted\n";
-    }
+    # Resolve a unique destination filename, auto-numbering on conflict
+    # (e.g. "photo.jpg" -> "photo (01).jpg" -> "photo (02).jpg" ...) instead of
+    # failing — two files with the same name/sha256 but different uuids are
+    # perfectly fine; this is purely a UI-friendliness concern.
+    $dest_name = _unique_copy_name($dbh, $src_user_id, $dest_dir_id, $dest_name);
 
-    # Create new file + version records
+    # Create new file + version records. mime_type and sha256 are copied
+    # straight from the source version — the disk copy above is a verified
+    # byte-for-byte duplicate, so the source's sha256 is still correct and
+    # recomputing it would just waste CPU on potentially large files.
     my $new_file = $dbh->selectrow_hashref(
         'INSERT INTO api.drive_files (user_id, file_name, dir_id) VALUES (?, ?, ?) RETURNING id',
         {}, $src_user_id, $dest_name, $dest_dir_id
     );
     my $new_version = $dbh->selectrow_hashref(
-        'INSERT INTO api.drive_versions (file_id, uuid, file_size, mime_type) SELECT ?, ?, file_size, mime_type FROM api.drive_versions WHERE id = ? RETURNING id',
+        'INSERT INTO api.drive_versions (file_id, uuid, file_size, mime_type, sha256)
+         SELECT ?, ?, file_size, mime_type, sha256 FROM api.drive_versions WHERE id = ?
+         RETURNING id, mime_type, sha256',
         {}, $new_file->{id}, $new_uuid, $data->{source_version_id}
     );
     $dbh->do(
@@ -205,17 +206,21 @@ sub execute_copy {
         {}, $src_user_id, $dest_size, $dest_size
     );
 
-    # Enqueue sha256 task for the new file
-    $dbh->do(
-        'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
-        {}, $new_file->{id}, 'sha256',
-        encode_json({ version_id => $new_version->{id}, uuid => $new_uuid }),
-        'queued'
-    );
+    # sha256 was already copied above. Only enqueue a fresh sha256 task if the
+    # source hadn't been hashed yet, so the copy doesn't silently ship with no
+    # checksum while the source's own sha256 task is still pending.
+    unless (defined $new_version->{sha256} && length $new_version->{sha256}) {
+        $dbh->do(
+            'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+            {}, $new_file->{id}, 'sha256',
+            encode_json({ version_id => $new_version->{id}, uuid => $new_uuid }),
+            'queued'
+        );
+    }
 
     # Enqueue thumbnail + slide_show_image tasks for image copies
     # (previously copies got neither — pre-existing gap, fixed here)
-    if ($data->{mime_type} && $data->{mime_type} =~ m{^image/}) {
+    if ($new_version->{mime_type} && $new_version->{mime_type} =~ m{^image/}) {
         for my $t (qw(thumbnail slide_show_image)) {
             $dbh->do(
                 'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
@@ -226,7 +231,30 @@ sub execute_copy {
         }
     }
 
-    log_info("Copy created new file_id=$new_file->{id} ($dest_name), sha256 task queued");
+    log_info("Copy created new file_id=$new_file->{id} ($dest_name)");
+}
+
+sub _unique_copy_name {
+    my ($dbh, $user_id, $dir_id, $desired_name) = @_;
+
+    my $taken = sub {
+        my ($name) = @_;
+        return $dbh->selectrow_hashref(
+            'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ? AND is_deleted = FALSE',
+            {}, $user_id, $name, $dir_id
+        );
+    };
+
+    return $desired_name unless $taken->($desired_name);
+
+    my ($base, $ext) = $desired_name =~ /^(.*?)(\.[^.\/]+)?$/;
+    $ext //= '';
+
+    for my $n (1 .. 9999) {
+        my $candidate = sprintf('%s (%02d)%s', $base, $n, $ext);
+        return $candidate unless $taken->($candidate);
+    }
+    die "Could not find a unique name for '$desired_name' after 9999 attempts\n";
 }
 
 sub execute_zip {

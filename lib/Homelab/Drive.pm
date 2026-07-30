@@ -505,7 +505,7 @@ sub copy_file {
     return { error => 'File not found' } unless $file;
 
     my $version = $self->{db}->query_row(
-        'SELECT id, uuid, file_size, mime_type FROM api.drive_versions WHERE id = ?',
+        'SELECT id, uuid, file_size FROM api.drive_versions WHERE id = ?',
         $file->{current_version_id}
     );
     return { error => 'File has no current version' } unless $version;
@@ -514,13 +514,10 @@ sub copy_file {
     my ($ok, $msg) = $self->_check_quota($user_id, $version->{file_size});
     return { error => $msg } unless $ok;
 
-    # Check for filename conflict at destination
+    # Destination name conflicts are resolved by the processor at execution
+    # time (auto-numbered "name (01).ext" etc.) rather than rejected here —
+    # two files with the same name/sha256 but different uuids are fine.
     my $dest_name = $dest_file_name // $file->{file_name};
-    my $conflict = $self->{db}->query_row(
-        'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ?',
-        $user_id, $dest_name, $dest_dir_id
-    );
-    return { error => "A file named '$dest_name' already exists at the destination" } if $conflict;
 
     # Enqueue copy task — processor does the actual disk + DB work
     my $task = $self->{db}->query_row(
@@ -534,7 +531,6 @@ sub copy_file {
             dest_dir_id     => $dest_dir_id,
             dest_file_name  => $dest_name,
             dest_file_size  => $version->{file_size},
-            mime_type       => $version->{mime_type},
         }),
         'queued'
     );
@@ -828,6 +824,75 @@ sub bulk_move {
     }
 
     return { success => 1, moved => \@moved, skipped => \@skipped };
+}
+
+sub bulk_copy {
+    my ($self, $email, $file_ids, $dir_ids, $dest_dir_id) = @_;
+
+    my $user_id = $self->_user_id($email);
+    return { error => 'User not found' } unless $user_id;
+
+    my @skipped;
+
+    # Folders can't be copied (no recursive directory copy exists) — report
+    # them as skipped rather than silently ignoring the selection.
+    if (@$dir_ids) {
+        my $dph = join(',', ('?') x @$dir_ids);
+        my $dir_rows = $self->{db}->query_rows(
+            "SELECT id, dir_name FROM api.drive_directories WHERE id IN ($dph) AND user_id = ?",
+            @$dir_ids, $user_id
+        );
+        my %name_by_id = map { $_->{id} => $_->{dir_name} } @{ $dir_rows // [] };
+        push @skipped, { id => $_, name => $name_by_id{$_} // 'folder', reason => "Folders can't be copied yet" }
+            for @$dir_ids;
+    }
+
+    return { success => 1, queued => [], skipped => \@skipped } unless @$file_ids;
+
+    my $ph   = join(',', ('?') x @$file_ids);
+    my $rows = $self->{db}->query_rows(
+        qq{SELECT f.id, f.file_name, f.current_version_id, v.uuid, v.file_size
+           FROM api.drive_files f
+           JOIN api.drive_versions v ON v.id = f.current_version_id
+           WHERE f.id IN ($ph) AND f.user_id = ? AND f.is_deleted = FALSE},
+        @$file_ids, $user_id
+    );
+    $rows //= [];
+
+    my %found = map { $_->{id} => 1 } @$rows;
+    for my $id (@$file_ids) {
+        push @skipped, { id => $id, name => undef, reason => 'File not found' } unless $found{$id};
+    }
+
+    # One quota check for the whole batch — fail fast rather than queuing
+    # copies the account doesn't have room for.
+    my $total_bytes = 0;
+    $total_bytes += $_->{file_size} for @$rows;
+    if (@$rows) {
+        my ($ok, $msg) = $self->_check_quota($user_id, $total_bytes);
+        return { error => $msg } unless $ok;
+    }
+
+    my @queued;
+    for my $f (@$rows) {
+        $self->{db}->query(
+            'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+            $f->{id}, 'copy',
+            encode_json({
+                source_file_id     => $f->{id},
+                source_version_id  => $f->{current_version_id},
+                source_uuid        => $f->{uuid},
+                source_user_id     => $user_id,
+                dest_dir_id        => $dest_dir_id,
+                dest_file_name     => $f->{file_name},
+                dest_file_size     => $f->{file_size},
+            }),
+            'queued'
+        );
+        push @queued, { id => $f->{id}, name => $f->{file_name} };
+    }
+
+    return { success => 1, queued => \@queued, skipped => \@skipped };
 }
 
 sub find_or_create_tasks_dir {

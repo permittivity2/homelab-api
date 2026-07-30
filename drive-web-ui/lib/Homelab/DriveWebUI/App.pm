@@ -110,6 +110,7 @@ sub startup ($self) {
     $p->get('/drive/tree.json')->to('directories#tree_json');
     $p->post('/drive/bulk/trash')->to('directories#bulk_trash');
     $p->post('/drive/bulk/move')->to('directories#bulk_move');
+    $p->post('/drive/bulk/copy')->to('directories#bulk_copy');
     $p->post('/drive/bulk/restore')->to('files#bulk_restore');
     $p->post('/drive/zip')->to('files#zip');
     $p->post('/drive/directories')->to('directories#create');

@@ -141,6 +141,20 @@ sub bulk_move ($c) {
     $c->render(json => { success => 0, error => $result->{error} // 'Bulk move failed' }, status => 400);
 }
 
+sub bulk_copy ($c) {
+    my $json   = $c->req->json // {};
+    my $result = $c->api->post('/api/v1/drive/bulk/copy', $json);
+    if ($result->{success}) {
+        $c->res->headers->header('HX-Trigger' => 'fileListChanged,treeChanged');
+        return $c->render(json => {
+            success => 1,
+            queued  => $result->{queued}  // [],
+            skipped => $result->{skipped} // [],
+        }, status => 200);
+    }
+    $c->render(json => { success => 0, error => $result->{error} // 'Bulk copy failed' }, status => 400);
+}
+
 # Build nested tree structure from flat directory list
 sub _build_tree ($dirs, $parent_id) {
     my @nodes;

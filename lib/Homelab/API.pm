@@ -541,6 +541,16 @@ $d->post('/bulk/move' => sub ($c) {
     return _set_json_response($c, $result, $result->{error} ? 400 : 200);
 });
 
+$d->post('/bulk/copy' => sub ($c) {
+    my $email    = $c->stash('user_email');
+    my $json     = $c->req->json // {};
+    my $file_ids = $json->{file_ids} // [];
+    my $dir_ids  = $json->{dir_ids}  // [];
+    my $target   = $json->{dir_id};   # undef = root
+    my $result   = $drive->bulk_copy($email, $file_ids, $dir_ids, $target);
+    return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
 $d->post('/zip' => sub ($c) {
     my $email     = $c->stash('user_email');
     my $json      = $c->req->json // {};
