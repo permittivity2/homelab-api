@@ -854,7 +854,7 @@ sub bulk_copy {
         qq{SELECT f.id, f.file_name, f.current_version_id, v.uuid, v.file_size
            FROM api.drive_files f
            JOIN api.drive_versions v ON v.id = f.current_version_id
-           WHERE f.id IN ($ph) AND f.user_id = ? AND f.is_deleted = FALSE},
+           WHERE f.id IN ($ph) AND f.user_id = ? AND f.deleted_at IS NULL},
         @$file_ids, $user_id
     );
     $rows //= [];

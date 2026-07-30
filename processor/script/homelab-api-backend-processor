@@ -240,7 +240,7 @@ sub _unique_copy_name {
     my $taken = sub {
         my ($name) = @_;
         return $dbh->selectrow_hashref(
-            'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ? AND is_deleted = FALSE',
+            'SELECT id FROM api.drive_files WHERE user_id = ? AND file_name = ? AND dir_id IS NOT DISTINCT FROM ? AND deleted_at IS NULL',
             {}, $user_id, $name, $dir_id
         );
     };
