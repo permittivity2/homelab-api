@@ -127,7 +127,11 @@ sub startup ($self) {
     # Public share routes (no auth required)
     $r->get('/s/:token')->to('sharing#public_view');
     $r->get('/s/:token/download')->to('sharing#public_download');
+    $r->get('/s/:token/thumbnail')->to('sharing#public_thumbnail');
+    $r->get('/s/:token/slide-show-image')->to('sharing#public_slide_show_image');
     $r->get('/s/:token/files/:file_uuid/download')->to('sharing#public_dir_file_download');
+    $r->get('/s/:token/files/:file_uuid/thumbnail')->to('sharing#public_dir_file_thumbnail');
+    $r->get('/s/:token/files/:file_uuid/slide-show-image')->to('sharing#public_dir_file_slide_show_image');
 }
 
 sub _format_size ($c, $bytes) {

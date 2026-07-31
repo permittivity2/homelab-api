@@ -387,6 +387,8 @@ th[data-sort]:hover { background: var(--bg); }
                  max-width: 480px; margin: 40px auto;
                  box-shadow: 0 4px 16px rgba(0,0,0,.07); }
 .pub-file-icon { font-size: 56px; margin-bottom: 16px; }
+.pub-file-preview { max-width: 100%; max-height: 320px; border-radius: var(--radius);
+                     margin-bottom: 16px; cursor: pointer; display: block; margin-left: auto; margin-right: auto; }
 .pub-file-name { font-size: 22px; font-weight: 600; margin-bottom: 8px; word-break: break-word; }
 .pub-file-meta { font-size: 14px; color: var(--muted); margin-bottom: 28px; }
 .pub-download-btn { font-size: 15px; padding: 12px 32px; }
@@ -412,6 +414,8 @@ th[data-sort]:hover { background: var(--bg); }
 .pub-dir-table tr:last-child td { border-bottom: none; }
 .pub-dir-fname { display: flex; align-items: center; gap: 8px; }
 .pub-dir-ficon { font-size: 15px; flex-shrink: 0; }
+.pub-dir-fthumb { width: 36px; height: 36px; object-fit: cover; border-radius: 4px;
+                   flex-shrink: 0; vertical-align: middle; cursor: pointer; }
 .pub-dir-fsize { color: var(--muted); white-space: nowrap; width: 80px; }
 .pub-dir-faction { text-align: right; white-space: nowrap; width: 120px; }
 .pub-dir-empty { padding: 32px; text-align: center; color: var(--muted); font-size: 14px; }

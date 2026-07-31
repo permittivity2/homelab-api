@@ -3,8 +3,15 @@
 % title $is_dir ? stash('dir_name') : stash('file_name');
 
 % if (!$is_dir) {
+  % my $is_image = (stash('mime_type') // '') =~ m{^image/};
   <div class="pub-file-card">
-    <div class="pub-file-icon">📄</div>
+    % if ($is_image) {
+      <img src="/s/<%= stash('token') %>/slide-show-image" class="pub-file-preview"
+           data-uuid="0" data-name="<%= stash('file_name') %>" data-mime="<%= stash('mime_type') %>"
+           onclick="PublicLightbox.open('0')">
+    % } else {
+      <div class="pub-file-icon">📄</div>
+    % }
     <h1 class="pub-file-name"><%= stash('file_name') %></h1>
     % if (stash('file_size')) {
       <p class="pub-file-meta"><%= format_size(stash('file_size')) %></p>
@@ -40,10 +47,22 @@
         <tbody>
           % for my $f (@$files) {
             % my $dl = '/s/' . stash('token') . '/files/' . $f->{uuid} . '/download';
-            <tr>
+            % my $is_image = ($f->{mime_type} // '') =~ m{^image/};
+            <tr data-uuid="<%= $f->{uuid} %>" data-name="<%= $f->{file_name} %>" data-mime="<%= $f->{mime_type} // '' %>">
               <td class="pub-dir-fname">
-                <span class="pub-dir-ficon">📄</span>
-                <a href="<%= $dl %>" class="pub-dir-flink"><%= $f->{file_name} %></a>
+                % if ($is_image) {
+                  <img src="/s/<%= stash('token') %>/files/<%= $f->{uuid} %>/thumbnail" class="pub-dir-fthumb"
+                       loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'"
+                       onclick="PublicLightbox.open('<%= $f->{uuid} %>')">
+                  <span class="pub-dir-ficon" style="display:none">📄</span>
+                % } else {
+                  <span class="pub-dir-ficon">📄</span>
+                % }
+                <a href="<%= $dl %>" class="pub-dir-flink"
+                   % if ($is_image) {
+                   onclick="return PublicLightbox.open('<%= $f->{uuid} %>')"
+                   % }
+                ><%= $f->{file_name} %></a>
               </td>
               <td class="pub-dir-fsize"><%= format_size($f->{file_size}) %></td>
               <td class="pub-dir-faction">

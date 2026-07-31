@@ -95,6 +95,34 @@ sub public_download ($c) {
     $c->rendered;
 }
 
+# GET /s/:token/thumbnail — inline thumbnail for a public single-file share
+sub public_thumbnail ($c) {
+    my $token = $c->stash('token');
+    my $meta  = $c->api->get("/api/v1/drive/s/$token/meta");
+    return $c->render(data => '', status => 404) unless $meta->{success};
+
+    my ($h1, $h2) = (substr($meta->{uuid}, 0, 2), substr($meta->{uuid}, 2, 2));
+    $c->res->code(200);
+    $c->res->headers->content_type('image/jpeg');
+    $c->res->headers->header('X-Accel-Redirect' =>
+        "/drive-files/.thumbnails/$meta->{user_id}/$h1/$h2/$meta->{uuid}.jpg");
+    $c->rendered;
+}
+
+# GET /s/:token/slide-show-image — inline slideshow-sized image for a public single-file share
+sub public_slide_show_image ($c) {
+    my $token = $c->stash('token');
+    my $meta  = $c->api->get("/api/v1/drive/s/$token/meta");
+    return $c->render(data => '', status => 404) unless $meta->{success};
+
+    my ($h1, $h2) = (substr($meta->{uuid}, 0, 2), substr($meta->{uuid}, 2, 2));
+    $c->res->code(200);
+    $c->res->headers->content_type('image/jpeg');
+    $c->res->headers->header('X-Accel-Redirect' =>
+        "/drive-files/.slide_show_images/$meta->{user_id}/$h1/$h2/$meta->{uuid}.jpg");
+    $c->rendered;
+}
+
 # GET /s/:token/files/:file_uuid/download — download a file from a shared dir
 sub public_dir_file_download ($c) {
     my $token     = $c->stash('token');
@@ -114,6 +142,42 @@ sub public_dir_file_download ($c) {
     $c->res->headers->content_type($file->{mime_type} // 'application/octet-stream');
     $c->res->headers->content_disposition("attachment; filename=\"$file->{file_name}\"");
     $c->res->headers->header('X-Accel-Redirect' => "/drive-files/$file->{owner_user_id}/$h1/$h2/$file_uuid");
+    $c->rendered;
+}
+
+# GET /s/:token/files/:file_uuid/thumbnail — inline thumbnail for a file in a shared dir
+sub public_dir_file_thumbnail ($c) {
+    my $token     = $c->stash('token');
+    my $file_uuid = $c->stash('file_uuid');
+    my $dir_meta  = $c->api->get("/api/v1/drive/s/$token/dir");
+    return $c->render(data => '', status => 404) unless $dir_meta->{success};
+
+    my ($file) = grep { $_->{uuid} eq $file_uuid } @{$dir_meta->{files} // []};
+    return $c->render(data => '', status => 404) unless $file;
+
+    my ($h1, $h2) = (substr($file_uuid, 0, 2), substr($file_uuid, 2, 2));
+    $c->res->code(200);
+    $c->res->headers->content_type('image/jpeg');
+    $c->res->headers->header('X-Accel-Redirect' =>
+        "/drive-files/.thumbnails/$file->{owner_user_id}/$h1/$h2/$file_uuid.jpg");
+    $c->rendered;
+}
+
+# GET /s/:token/files/:file_uuid/slide-show-image — inline slideshow-sized image for a file in a shared dir
+sub public_dir_file_slide_show_image ($c) {
+    my $token     = $c->stash('token');
+    my $file_uuid = $c->stash('file_uuid');
+    my $dir_meta  = $c->api->get("/api/v1/drive/s/$token/dir");
+    return $c->render(data => '', status => 404) unless $dir_meta->{success};
+
+    my ($file) = grep { $_->{uuid} eq $file_uuid } @{$dir_meta->{files} // []};
+    return $c->render(data => '', status => 404) unless $file;
+
+    my ($h1, $h2) = (substr($file_uuid, 0, 2), substr($file_uuid, 2, 2));
+    $c->res->code(200);
+    $c->res->headers->content_type('image/jpeg');
+    $c->res->headers->header('X-Accel-Redirect' =>
+        "/drive-files/.slide_show_images/$file->{owner_user_id}/$h1/$h2/$file_uuid.jpg");
     $c->rendered;
 }
 

@@ -6,7 +6,9 @@
   <title><%= stash('title') // 'Shared — Homelab Drive' %></title>
   <link rel="stylesheet" href="/style.css?v=<%= app->config->{asset_version} // '1' %>">
 </head>
-<body class="<%= stash('device_class') // 'desktop' %> public-share-body">
+<body class="<%= stash('device_class') // 'desktop' %> public-share-body"
+      data-token="<%= stash('token') // '' %>"
+      data-share-type="<%= stash('share_type') // '' %>">
 
 <header class="public-share-header">
   <a href="/login" class="public-share-logo">Homelab Drive</a>
@@ -21,5 +23,31 @@
   <a href="/login">Sign in to Homelab Drive</a>
 </footer>
 
+<div id="lightbox" class="lightbox hidden">
+  <div class="lightbox-backdrop" onclick="PublicLightbox.close()"></div>
+  <div class="lightbox-content">
+    <button class="lightbox-nav lightbox-prev" onclick="PublicLightbox.prev()" aria-label="Previous">‹</button>
+    <img id="lightbox-image" class="lightbox-image" alt="">
+    <button class="lightbox-nav lightbox-next" onclick="PublicLightbox.next()" aria-label="Next">›</button>
+
+    <div class="lightbox-controls">
+      <button id="lightbox-play" onclick="PublicLightbox.toggleSlideshow()" title="Play/Pause">⏸</button>
+      <div class="lightbox-speed">
+        <button data-secs="2"  onclick="PublicLightbox.setSlideshowInterval(2)">2s</button>
+        <button data-secs="4"  onclick="PublicLightbox.setSlideshowInterval(4)" class="active">4s</button>
+        <button data-secs="10" onclick="PublicLightbox.setSlideshowInterval(10)">10s</button>
+      </div>
+      <a id="lightbox-download" class="lightbox-btn" download title="Download">⬇</a>
+      <button onclick="PublicLightbox.toggleFullscreen()" title="Fullscreen">⛶</button>
+      <button onclick="PublicLightbox.close()" title="Close">✕</button>
+    </div>
+    <div class="lightbox-info">
+      <span id="lightbox-counter"></span>
+      <span id="lightbox-caption"></span>
+    </div>
+  </div>
+</div>
+
+<script src="/public-lightbox.js?v=<%= app->config->{asset_version} // '1' %>"></script>
 </body>
 </html>

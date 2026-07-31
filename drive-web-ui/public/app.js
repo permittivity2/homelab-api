@@ -194,6 +194,10 @@ const DriveUI = (() => {
 
   function navigate(dirId) {
     closeLightbox();
+    // Cancel any in-flight request still pending from the folder we're leaving
+    // (e.g. a "Load more" click) — otherwise a late response can append stray
+    // rows from the old folder into the new folder's #file-tbody.
+    document.querySelectorAll('#file-tbody [hx-get]').forEach(el => htmx.trigger(el, 'htmx:abort'));
     currentDirId = dirId;
     const browsePath = dirId != null ? `/drive?dir_id=${dirId}` : '/drive';
 
@@ -214,6 +218,7 @@ const DriveUI = (() => {
 
   window.addEventListener('popstate', (e) => {
     closeLightbox();
+    document.querySelectorAll('#file-tbody [hx-get]').forEach(el => htmx.trigger(el, 'htmx:abort'));
     if (location.hash) {
       history.replaceState(e.state, '', location.pathname + location.search);
       return;
