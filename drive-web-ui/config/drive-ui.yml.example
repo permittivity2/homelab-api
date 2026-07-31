@@ -18,6 +18,8 @@ secrets:
 session:
   secure: 1         # Set to 0 only for local HTTP development
   expiry: 604800    # 7 days in seconds
+  # cookie_name: homelab-drive   # Uncomment and set to preserve sessions across
+                                  # a cookie-name change (e.g. during a rename/migration)
 
 upload:
   # Temp directory for incoming uploads before they are forwarded to api.example.com.

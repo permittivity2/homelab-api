@@ -21,7 +21,7 @@ sub startup ($self) {
     croak 'secrets array required in drive-ui.yml (must match all drive servers)'
         unless $cfg->{secrets} && ref $cfg->{secrets} eq 'ARRAY';
     $self->secrets($cfg->{secrets});
-    $self->sessions->cookie_name('homelab-drive');
+    $self->sessions->cookie_name($cfg->{session}{cookie_name} // 'homelab-drive');
     $self->sessions->secure($cfg->{session}{secure} // 1);
     $self->sessions->default_expiration($cfg->{session}{expiry} // 86_400 * 7);
 
