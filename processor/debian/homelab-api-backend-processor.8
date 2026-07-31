@@ -1,0 +1,113 @@
+.TH HOMELAB-API-BACKEND-PROCESSOR 8 "2026-07-31" "homelab-api-backend-processor" "System Administration"
+.SH NAME
+homelab-api-backend-processor \- Homelab Drive asynchronous task processor
+.SH SYNOPSIS
+.B homelab-api-backend-processor
+.RB [ --config
+.IR path ]
+.SH DESCRIPTION
+.B homelab-api-backend-processor
+is a standalone daemon that polls the
+.I api.drive_files_tasks
+queue and executes asynchronous Drive file work: thumbnail generation,
+slideshow-image derivative generation, and copy/move file processing.
+It connects to PostgreSQL
+.B independently
+of
+.BR homelab-api (8)
+\- it does not share a connection or process with it, and does not
+require or use
+.I dovecot.users
+access.
+.P
+It is normally managed via the
+.B homelab-api-backend-processor.service
+systemd unit.
+.SH OPTIONS
+.TP
+.BI --config " path"
+Path to the YAML configuration file. Default:
+.IR /etc/homelab/processor/config.yml .
+.SH FILES
+.TP
+.I /etc/homelab/processor/config.yml
+Main configuration file (YAML). See CONFIGURATION below.
+.SH CONFIGURATION
+.SS database
+PostgreSQL connection, configured independently of
+.BR homelab-api (8) 's
+own
+.I database
+section \- credentials are not shared or inherited even when both
+services run on the same host.
+.TP
+.B host
+Database host or IP (e.g. a pgbouncer endpoint). No default \- required.
+.TP
+.B port
+Database port. Default:
+.IR 5432 .
+.TP
+.B name
+Database name. Default:
+.IR mailserver .
+.TP
+.B user
+Database role. Default:
+.IR homelab_processor .
+Should be a dedicated least-privilege role: CRUD on
+.I api.*
+only \- no
+.I dovecot
+schema access is needed or should be granted.
+.TP
+.B password
+Database password for
+.BR user .
+No default \- required.
+.SS processor
+.TP
+.B max_workers
+Maximum number of file-processing tasks handled concurrently (one
+worker per
+.IR file_id ).
+Default:
+.IR 8 .
+.TP
+.B poll_interval_seconds
+How often, in seconds, to poll for newly queued tasks. Default:
+.IR 2 .
+.TP
+.B slide_show_image_size
+Maximum dimensions for the slideshow-sized image derivative, as an
+ImageMagick geometry string. Default:
+.IR "1280x1280>" .
+.TP
+.B slide_show_image_quality
+JPEG quality (0\-100) for the slideshow-sized image derivative.
+Default:
+.IR 82 .
+.SS storage
+.TP
+.B drive_path
+Filesystem path (typically an NFS mount) where Drive file content and
+derivatives are stored. Must be set to the
+.B identical
+path used by
+.BR homelab-api (8) 's
+own
+.I storage.drive_path
+\- both services access the same mount independently.
+.SH SEE ALSO
+.BR homelab-api (8)
+.SH BUGS
+Configuration, including database credentials, is read
+.B only at startup.
+After changing
+.I /etc/homelab/processor/config.yml
+(for example, rotating the database password), the service must be
+restarted
+.RI ( "systemctl restart homelab-api-backend-processor" )
+\- it will not pick up the change while running, and a stale in-memory
+password will silently stall the task queue rather than erroring
+loudly.

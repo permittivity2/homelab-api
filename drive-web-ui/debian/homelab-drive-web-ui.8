@@ -1,0 +1,127 @@
+.TH HOMELAB-DRIVE-WEB-UI 8 "2026-07-31" "homelab-drive-web-ui" "System Administration"
+.SH NAME
+homelab-drive-web-ui \- Homelab Drive backend-for-frontend web UI
+.SH SYNOPSIS
+.B homelab-drive-web-ui
+.br
+(started via
+.B hypnotoad
+under the
+.B homelab-drive-web-ui.service
+systemd unit; not normally invoked directly)
+.SH DESCRIPTION
+.B homelab-drive-web-ui
+is the browser-facing web UI for the Homelab Drive service. It is a
+backend-for-frontend (BFF): it renders HTML/htmx pages, proxies uploads
+and downloads, and calls
+.BR homelab-api (8)
+over HTTP for all data access. It has
+.B no direct database connectivity
+of its own.
+.P
+It runs as a Mojolicious application under Hypnotoad and is managed via
+systemd; it is not intended to be run interactively.
+.SH FILES
+.TP
+.I /etc/homelab/drive-web-ui/drive-ui.yml
+Main configuration file (YAML). See CONFIGURATION below.
+.TP
+.I /usr/share/homelab-drive-web-ui/
+Installed templates, public static assets, and the example
+configuration file.
+.SH ENVIRONMENT
+.TP
+.B HOMELAB_DRIVE_WEB_UI_CONFIG
+Overrides the path to the configuration file (default
+.IR /etc/homelab/drive-web-ui/drive-ui.yml ).
+Set by the shipped systemd unit.
+.TP
+.B HOMELAB_DRIVE_WEB_UI_HOME
+Overrides the base directory used to locate templates
+.RI ( templates/ )
+and static assets
+.RI ( public/ ).
+Default:
+.IR /usr/share/homelab-drive-web-ui .
+Set by the shipped systemd unit; useful for running from a source
+checkout during development.
+.SH CONFIGURATION
+.SS api
+.TP
+.B base_url
+Base URL of the
+.B homelab-api
+instance this UI proxies requests to. No default \- required.
+.SS asset_version
+A cache-busting string appended to static asset URLs
+.RI ( app.js ", " style.css ).
+Bump it on every deploy so browsers fetch updated assets rather than
+serving stale cached copies. No functional default.
+.SS secrets
+An array of one or more session-signing secrets. Sessions are signed
+cookies; if you run more than one instance behind a load balancer, all
+instances
+.B must
+use the identical
+.B secrets
+value, or sessions created by one instance are rejected by another.
+Required \- the service refuses to start without it.
+.SS session
+.TP
+.B secure
+Boolean (0/1). Marks the session cookie
+.BR Secure ;
+set to
+.I 0
+only for local HTTP development. Default:
+.IR 1 .
+.TP
+.B expiry
+Session lifetime, in seconds. Default:
+.I 604800
+(7 days).
+.TP
+.B cookie_name
+Name of the session cookie. Default:
+.IR homelab-drive .
+Set this to an old cookie name (e.g.
+.IR mailmasker-drive )
+during a rename/migration to preserve existing logged-in sessions
+across the change, given the same
+.B secrets
+value; otherwise every existing session is invalidated the moment the
+cookie name changes.
+.SS upload
+.TP
+.B tmpdir
+Temporary directory used to buffer an incoming upload in full before
+streaming it on to the API. Needs at least as much free space as the
+largest expected upload (see
+.BR max_size ).
+Default: the system temp directory (unset).
+.TP
+.B max_size
+Maximum accepted upload size, in bytes. Default:
+.I 10737418240
+(10GB).
+.SS server
+Hypnotoad listen/worker configuration.
+.TP
+.B listen
+Full listen URL, e.g.
+.IR http://0.0.0.0:2500 .
+Default:
+.IR http://127.0.0.1:2501 .
+.TP
+.B workers
+Number of Hypnotoad worker processes. Default:
+.IR 4 .
+.TP
+.B pid_file
+Path to the Hypnotoad PID file. Default:
+.IR /var/lib/homelab/drive-ui-hypnotoad.pid .
+.SH SEE ALSO
+.BR homelab-api (8)
+.P
+Full example configuration:
+.I /usr/share/homelab-drive-web-ui/config/drive-ui.yml.example

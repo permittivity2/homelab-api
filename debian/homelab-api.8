@@ -1,0 +1,182 @@
+.TH HOMELAB-API 8 "2026-07-31" "homelab-api" "System Administration"
+.SH NAME
+homelab-api \- Homelab Drive JSON API server
+.SH SYNOPSIS
+.B homelab-api
+.br
+(started via
+.B hypnotoad
+under the
+.B homelab-api.service
+systemd unit; not normally invoked directly)
+.SH DESCRIPTION
+.B homelab-api
+is the JSON API backend for the Homelab Drive file storage service. It
+handles user authentication (JWT issuance/refresh against a
+.I dovecot.users
+table), Drive file/directory CRUD, sharing, and enqueues asynchronous
+work (thumbnail and slideshow-image generation, copy/move processing)
+for
+.BR homelab-api-backend-processor (8)
+to pick up.
+.P
+It runs as a Mojolicious application under Hypnotoad and is managed via
+systemd; it is not intended to be run interactively.
+.SH FILES
+.TP
+.I /etc/homelab/api/config.yml
+Main configuration file (YAML). See CONFIGURATION below.
+.SH ENVIRONMENT
+.TP
+.B HOMELAB_API_CONFIG
+Overrides the path to the configuration file (default
+.IR /etc/homelab/api/config.yml ).
+Set by the shipped systemd unit.
+.SH CONFIGURATION
+The configuration file is YAML with the following top-level sections.
+.SS database
+PostgreSQL connection used for both the
+.I api
+schema (Drive data) and read-only
+.I dovecot.users
+lookups (login).
+.TP
+.B host
+Database host or IP (e.g. a pgbouncer endpoint). No default \- required.
+.TP
+.B port
+Database port. Default:
+.IR 5432 .
+.TP
+.B name
+Database name. Default:
+.IR mailserver .
+.TP
+.B user
+Database role. Default:
+.IR homelab_api .
+Should be a dedicated least-privilege role: CRUD on
+.I api.*
+plus read-only
+.I SELECT
+on
+.IR dovecot.users .
+.TP
+.B password
+Database password for
+.BR user .
+No default \- required.
+.SS jwt
+.TP
+.B secret
+Signing key for issued JWTs. No default \- required; use a long random
+value in production.
+.TP
+.B algorithm
+JWT signing algorithm. Default:
+.IR HS256 .
+.TP
+.B expiry_seconds
+Access token lifetime, in seconds. Default:
+.I 3600
+(1 hour).
+.TP
+.B refresh_expiry_seconds
+Refresh token lifetime, in seconds. Default:
+.I 2592000
+(30 days).
+.SS session
+.TP
+.B secure
+Boolean (0/1). When set, marks session/auth cookies
+.BR Secure ;
+set to
+.I 1
+when served behind an HTTPS-terminating proxy, otherwise
+.IR 0 .
+Default:
+.IR 0 .
+.SS server
+Hypnotoad listen/worker configuration.
+.TP
+.B host
+Bind address, or a full
+.I http://
+URL (in which case
+.B port
+below is ignored). Default:
+.IR 0.0.0.0 .
+.TP
+.B port
+Bind port (ignored if
+.B host
+is a full URL). Default:
+.IR 3000 .
+.TP
+.B workers
+Number of Hypnotoad worker processes. Default:
+.I 2
+in code; the shipped example config sets
+.IR 4 .
+.TP
+.B heartbeat_timeout
+Seconds before Hypnotoad kills a worker that has stopped responding to
+heartbeats. Hypnotoad's own built-in default is
+.I 50
+seconds; the shipped example config raises this to
+.I 600
+to accommodate large uploads. Only applied if set.
+.TP
+.B accepts
+Optional: passed through as Hypnotoad's
+.I accepts
+worker setting (requests handled before a worker recycles). Unset by
+default (Hypnotoad's own default applies).
+.TP
+.B max_clients
+Optional: passed through as Hypnotoad's
+.I clients
+worker setting (max concurrent connections per worker). Unset by
+default (Hypnotoad's own default applies).
+.SS logging
+.TP
+.B level
+Log verbosity (e.g.
+.IR debug ", " info ", " warn ", " error ).
+Default:
+.IR info .
+.TP
+.B format
+Log line format,
+.I json
+or plain text. Default:
+.IR json .
+.SS storage
+.TP
+.B drive_path
+Filesystem path (typically an NFS mount) where Drive file content and
+derivatives are stored.
+.B homelab-api-backend-processor
+must be configured with the identical path, since it accesses the same
+mount independently.
+.TP
+.B max_file_size_mb
+Per-upload hard size limit, in megabytes. Default:
+.I 10240
+(10GB).
+.TP
+.B max_concurrent_uploads
+Concurrency limit advertised to clients. Default:
+.IR 4 .
+.SH SEE ALSO
+.BR homelab-api-backend-processor (8),
+.BR homelab-drive-web-ui (8)
+.P
+Full example configuration:
+.I /usr/share/doc/homelab-api/config.example.yml
+.SH BUGS
+Changing
+.B database
+credentials requires restarting the service
+.RI ( "systemctl restart homelab-api" )
+\- configuration is only read at startup.
