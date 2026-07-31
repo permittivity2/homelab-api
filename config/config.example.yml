@@ -6,7 +6,7 @@ database:
   host: YOUR_DB_HOST
   port: 5432
   name: mailserver
-  user: dovecot_user
+  user: homelab_api
   password: YOUR_DB_PASSWORD_HERE
 
 # JWT Configuration

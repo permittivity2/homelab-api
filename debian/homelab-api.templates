@@ -22,7 +22,7 @@ Description: PostgreSQL database name:
 
 Template: homelab-api/db/user
 Type: string
-Default: dovecot_user
+Default: homelab_api
 Description: PostgreSQL database username:
 
 Template: homelab-api/db/password
