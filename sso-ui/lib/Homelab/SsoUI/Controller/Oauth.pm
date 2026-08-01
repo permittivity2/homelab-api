@@ -109,7 +109,9 @@ sub authorize_submit ($c) {
         expires_at    => time + CODE_TTL,
     };
 
-    $c->redirect_to(Mojo::URL->new($redirect_uri)->query(code => $code, state => $state));
+    my $target = Mojo::URL->new($redirect_uri);
+    $target->query->append(code => $code, state => $state);
+    $c->redirect_to($target);
 }
 
 # POST /oauth/token — server-to-server code exchange
