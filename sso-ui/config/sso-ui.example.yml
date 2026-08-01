@@ -3,18 +3,36 @@
 # Implements a small OAuth2 authorization-code flow (/oauth/authorize,
 # /oauth/token, /oauth/userinfo) as a thin wrapper around homelab-api's
 # existing login/JWT machinery. The OAuth "access_token" issued to clients
-# IS the homelab-api JWT — this service does not mint or store its own
-# tokens beyond a short-lived, one-time authorization code.
+# IS the homelab-api JWT — this service does not mint a separate token, it
+# just caches it (plus a refresh token) in its own signed session cookie so
+# a user who already authenticated once can hit /oauth/authorize again —
+# for any registered client — and skip the login form entirely.
+#
+# IMPORTANT: If you run more than one instance behind a load balancer, all
+# instances must have identical values for 'secrets'. The IdP session is a
+# signed cookie; a mismatched secret causes all sessions created by another
+# instance to be rejected.
 
 homelab_api:
   base_url: https://api.example.com
+
+# Session signing secrets — CHANGE THIS, keep identical across all sso-ui
+# instances.
+secrets:
+  - "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET_AT_LEAST_32_CHARS"
+
+session:
+  secure: 1         # Set to 0 only for local HTTP development
+  expiry: 2592000   # 30 days in seconds — matches homelab-api's refresh
+                     # token lifetime, since that's the real ceiling on how
+                     # long a session can silently renew itself anyway
 
 # OAuth2 clients allowed to use this SSO service. Each consumer (Roundcube,
 # and later the Drive web UI) needs its own entry here.
 clients:
   - client_id: roundcube
     client_secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
-    redirect_uri: "https://mail.example.com/index.php/login/oauth"
+    redirect_uri: "https://mail.example.com/index.php?_task=login&_action=oauth"
 
 server:
   # Default port (2502) is deliberately different from homelab-api (3000)

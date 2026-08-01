@@ -18,9 +18,12 @@ as a thin wrapper around
 existing login and JWT machinery. The OAuth "access_token" issued to
 clients
 .B is
-the homelab-api JWT itself \- this service does not mint or persist its
-own tokens beyond a short-lived (60 second), one-time authorization code
-held in memory.
+the homelab-api JWT itself \- this service does not mint a separate
+token. It does cache the JWT and refresh token in its own signed IdP
+session cookie (see SS session in CONFIGURATION) so a user who already
+authenticated once can skip the login form on subsequent requests, and
+mints a short-lived (60 second), one-time authorization code per
+request, held in memory.
 .P
 Consumers (Roundcube, and eventually
 .BR homelab-drive-web-ui )
@@ -58,6 +61,39 @@ Base URL of the
 .B homelab-api
 instance this service authenticates users against and validates tokens
 through. No default \- required.
+.SS secrets
+An array of one or more session-signing secrets, for the IdP session
+cookie (see SS session below). If you run more than one instance behind a
+load balancer, all instances
+.B must
+use the identical
+.B secrets
+value, or sessions created by one instance are rejected by another.
+Required \- the service refuses to start without it.
+.SS session
+.TP
+.B secure
+Boolean (0/1). Marks the IdP session cookie
+.BR Secure ;
+set to
+.I 0
+only for local HTTP development. Default:
+.IR 1 .
+.TP
+.B expiry
+IdP session lifetime, in seconds. Default:
+.I 2592000
+(30 days) \- matches
+.BR homelab-api 's
+refresh-token lifetime, since that's the practical ceiling on how long a
+session can keep silently renewing itself anyway. While this session is
+valid, a request to
+.I /oauth/authorize
+for
+.B any
+registered client skips the login form entirely and redirects straight
+back with a fresh authorization code \- this is what makes repeat/
+cross-app logins invisible instead of showing a form every time.
 .SS clients
 A list of OAuth2 clients permitted to use this SSO service. Each entry
 has:

@@ -3,6 +3,8 @@ package Homelab::SsoUI::Controller::Oauth;
 use Mojo::Base 'Mojolicious::Controller', -signatures;
 use Mojo::URL;
 use Mojo::Util qw(secure_compare);
+use Mojo::JSON qw(decode_json);
+use MIME::Base64 qw(decode_base64);
 
 # One-time authorization codes, keyed by code: { jwt, refresh_token,
 # client_id, redirect_uri, expires_at }. In-process only — the config's
@@ -27,9 +29,52 @@ sub _random_code {
     return $code;
 }
 
+# Reads the `exp` claim straight out of a JWT's payload segment, with no
+# signature verification — only used after homelab-api's own introspect
+# call has already confirmed the token is currently valid, purely to give
+# the client an accurate expires_in instead of leaving it blank.
+sub _jwt_expires_in ($jwt) {
+    my (undef, $payload_b64) = split /\./, $jwt, 3;
+    return undef unless $payload_b64;
+    $payload_b64 =~ tr{-_}{+/};
+    $payload_b64 .= '=' x ((4 - length($payload_b64) % 4) % 4);
+    my $payload = eval { decode_json(decode_base64($payload_b64)) };
+    return undef unless $payload && $payload->{exp};
+    my $remaining = $payload->{exp} - time;
+    return $remaining > 0 ? $remaining : undef;
+}
+
 sub _purge_expired {
     my $now = time;
     delete $codes{$_} for grep { $codes{$_}{expires_at} < $now } keys %codes;
+}
+
+# Mints a one-time code for the given tokens and redirects the browser back
+# to the client with it — shared by both the "already has an IdP session"
+# fast path and the "just typed a password" path.
+sub _issue_code_and_redirect ($c, $client_id, $redirect_uri, $state, $jwt, $refresh_token, $expires_in) {
+    _purge_expired();
+    my $code = _random_code();
+    $codes{$code} = {
+        jwt           => $jwt,
+        refresh_token => $refresh_token,
+        expires_in    => $expires_in,
+        client_id     => $client_id,
+        redirect_uri  => $redirect_uri,
+        expires_at    => time + CODE_TTL,
+    };
+
+    my $target = Mojo::URL->new($redirect_uri);
+    $target->query->append(code => $code, state => $state);
+    $c->redirect_to($target);
+}
+
+# Establishes (or refreshes) the IdP session — not scoped to any one
+# client, since a valid session should let a request for *any* registered
+# client skip the login form. This is what makes it real SSO instead of a
+# per-app login.
+sub _establish_session ($c, $jwt, $refresh_token, $email) {
+    $c->session(jwt => $jwt, refresh_token => $refresh_token, email => $email);
 }
 
 # GET /oauth/authorize?response_type=code&client_id=...&redirect_uri=...&state=...
@@ -46,6 +91,33 @@ sub authorize ($c) {
             status   => 400,
             message  => 'Unknown client or redirect_uri.',
         );
+    }
+
+    # Already have a live IdP session? Skip the form entirely.
+    if (my $jwt = $c->session('jwt')) {
+        my $info = $c->api->introspect($jwt);
+        if ($info->{email}) {
+            return _issue_code_and_redirect(
+                $c, $client_id, $redirect_uri, $state,
+                $jwt, $c->session('refresh_token'), _jwt_expires_in($jwt),
+            );
+        }
+
+        # JWT's expired/invalid — try a silent refresh before giving up.
+        if (my $refresh_token = $c->session('refresh_token')) {
+            my $result = $c->api->refresh($refresh_token);
+            if ($result->{success}) {
+                _establish_session($c, $result->{token}, $result->{refresh_token}, $c->session('email'));
+                return _issue_code_and_redirect(
+                    $c, $client_id, $redirect_uri, $state,
+                    $result->{token}, $result->{refresh_token}, $result->{expires_in},
+                );
+            }
+        }
+
+        # Both the JWT and the refresh attempt failed — the session is
+        # dead, clear it so we don't keep retrying it on every request.
+        $c->session(expires => 1);
     }
 
     $c->render(
@@ -98,20 +170,11 @@ sub authorize_submit ($c) {
         return $render_form_error->($msg);
     }
 
-    _purge_expired();
-    my $code = _random_code();
-    $codes{$code} = {
-        jwt           => $result->{token},
-        refresh_token => $result->{refresh_token},
-        expires_in    => $result->{expires_in},
-        client_id     => $client_id,
-        redirect_uri  => $redirect_uri,
-        expires_at    => time + CODE_TTL,
-    };
-
-    my $target = Mojo::URL->new($redirect_uri);
-    $target->query->append(code => $code, state => $state);
-    $c->redirect_to($target);
+    _establish_session($c, $result->{token}, $result->{refresh_token}, $email);
+    _issue_code_and_redirect(
+        $c, $client_id, $redirect_uri, $state,
+        $result->{token}, $result->{refresh_token}, $result->{expires_in},
+    );
 }
 
 # POST /oauth/token — server-to-server code exchange

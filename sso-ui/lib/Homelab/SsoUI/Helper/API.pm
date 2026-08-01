@@ -28,6 +28,17 @@ sub introspect ($self, $jwt) {
     return $self->_decode($tx);
 }
 
+# POST /api/v1/auth/refresh, passing the refresh token as the
+# `homelab-token` cookie (the shape homelab-api expects) — returns the
+# decoded JSON body (success/token/refresh_token/expires_in/...).
+sub refresh ($self, $refresh_token) {
+    my $tx = $self->_ua->post(
+        $self->base_url . '/api/v1/auth/refresh',
+        { Cookie => "homelab-token=$refresh_token" },
+    );
+    return $self->_decode($tx);
+}
+
 sub _decode ($self, $tx) {
     my $res = $tx->result;
     if (my $err = $tx->error) {
