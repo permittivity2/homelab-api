@@ -8,6 +8,16 @@
 api:
   base_url: https://api.example.com
 
+# SSO login — this service delegates its login page entirely to
+# homelab-sso-ui (see github-repos/homelab-api issue #012); there is no
+# local username/password form. Register this client's redirect_uri in
+# homelab-sso-ui's own config.yml (its `clients:` list) too.
+sso:
+  base_url:      https://login.example.com
+  client_id:     drive
+  client_secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+  redirect_uri:  "https://drive.example.com/login"
+
 # Bump this string on every deploy to bust browser caches for app.js and style.css
 asset_version: "45"
 

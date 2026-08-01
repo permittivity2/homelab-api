@@ -6,6 +6,7 @@ use YAML::XS qw(LoadFile);
 use Carp qw(croak);
 
 use Homelab::DriveWebUI::Helper::API;
+use Homelab::DriveWebUI::Helper::SSO;
 
 sub startup ($self) {
     my $config_file = $ENV{HOMELAB_DRIVE_WEB_UI_CONFIG} // '/etc/homelab/drive-web-ui/drive-ui.yml';
@@ -56,6 +57,14 @@ sub startup ($self) {
             },
         );
     });
+    $self->helper(sso => sub ($c) {
+        Homelab::DriveWebUI::Helper::SSO->new(
+            base_url      => $c->app->config->{sso}{base_url}      // 'https://login.example.com',
+            client_id     => $c->app->config->{sso}{client_id}     // 'drive',
+            client_secret => $c->app->config->{sso}{client_secret},
+            redirect_uri  => $c->app->config->{sso}{redirect_uri},
+        );
+    });
     $self->helper(format_size => \&_format_size);
     $self->helper(format_date => \&_format_date);
     $self->helper(file_icon   => \&_file_icon);
@@ -85,9 +94,8 @@ sub startup ($self) {
     # Health check — no auth, used by nginx upstream health monitoring
     $r->get('/health' => sub ($c) { $c->render(text => 'ok', status => 200) });
 
-    # Auth routes (no guard)
-    $r->get('/login')->to('auth#login_form');
-    $r->post('/login')->to('auth#login');
+    # Auth routes (no guard) — /login does triple duty, see Controller::Auth
+    $r->get('/login')->to('auth#login');
     $r->post('/logout')->to('auth#logout');
     $r->get('/')->to(cb => sub ($c) { $c->redirect_to('/drive') });
 

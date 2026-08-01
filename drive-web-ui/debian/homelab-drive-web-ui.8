@@ -52,6 +52,39 @@ checkout during development.
 Base URL of the
 .B homelab-api
 instance this UI proxies requests to. No default \- required.
+.SS sso
+This service has no local username/password login form \- login is
+delegated entirely to
+.BR homelab-sso-ui .
+Visiting any page while unauthenticated redirects straight to it; a
+successful login redirects back to
+.BR redirect_uri .
+.TP
+.B base_url
+Base URL of the
+.B homelab-sso-ui
+instance to authenticate against. No default \- required.
+.TP
+.B client_id
+This client's identifier, as registered in
+.BR homelab-sso-ui 's
+own
+.I clients
+config list. No default \- required.
+.TP
+.B client_secret
+Shared secret for the same client registration, used when exchanging an
+authorization code for a token. No default \- required.
+.TP
+.B redirect_uri
+The exact callback URL
+.B homelab-sso-ui
+will redirect back to after a successful login \- must match this
+client's registered
+.B redirect_uri
+on the
+.B homelab-sso-ui
+side exactly. No default \- required.
 .SS asset_version
 A cache-busting string appended to static asset URLs
 .RI ( app.js ", " style.css ).
@@ -121,7 +154,8 @@ Number of Hypnotoad worker processes. Default:
 Path to the Hypnotoad PID file. Default:
 .IR /var/lib/homelab/drive-ui-hypnotoad.pid .
 .SH SEE ALSO
-.BR homelab-api (8)
+.BR homelab-api (8),
+.BR homelab-sso-ui (8)
 .P
 Full example configuration:
 .I /usr/share/homelab-drive-web-ui/config/drive-ui.yml.example
