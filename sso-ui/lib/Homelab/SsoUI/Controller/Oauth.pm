@@ -49,6 +49,36 @@ sub _purge_expired {
     delete $codes{$_} for grep { $codes{$_}{expires_at} < $now } keys %codes;
 }
 
+use constant EPOCH_COOKIE => 'homelab-sso-epoch';
+
+# Sets the cross-app "session epoch" cookie — a plain, unsigned opaque
+# marker, deliberately scoped wider than this app (session.cookie_domain,
+# e.g. "mailmasker.org") so every consuming app under that domain can see
+# it appear/disappear on the very next request, with no extra network
+# call. It's not a bearer credential: possessing/forging it grants no
+# access on its own, since each app still needs its own real
+# jwt/refresh_token. See github-repos/homelab-api issue #012.
+sub _set_epoch_cookie ($c, $epoch) {
+    my $domain = $c->app->config->{session}{cookie_domain};
+    $c->cookie(EPOCH_COOKIE, $epoch, {
+        ($domain ? (domain => $domain) : ()),
+        path     => '/',
+        secure   => $c->app->config->{session}{secure} // 1,
+        httponly => 1,
+        samesite => 'Lax',
+        expires  => time + ($c->app->config->{session}{expiry} // 30 * 24 * 60 * 60),
+    });
+}
+
+sub _clear_epoch_cookie ($c) {
+    my $domain = $c->app->config->{session}{cookie_domain};
+    $c->cookie(EPOCH_COOKIE, '', {
+        ($domain ? (domain => $domain) : ()),
+        path    => '/',
+        expires => 1,
+    });
+}
+
 # Is the given URL's origin (scheme+host+port) one of our registered
 # clients' redirect_uri origins? Looser than the OAuth redirect_uri check
 # (which requires an exact match) — a sensible post-logout landing page
@@ -70,13 +100,14 @@ sub _origin_allowed ($c, $url) {
 # Mints a one-time code for the given tokens and redirects the browser back
 # to the client with it — shared by both the "already has an IdP session"
 # fast path and the "just typed a password" path.
-sub _issue_code_and_redirect ($c, $client_id, $redirect_uri, $state, $jwt, $refresh_token, $expires_in) {
+sub _issue_code_and_redirect ($c, $client_id, $redirect_uri, $state, $jwt, $refresh_token, $expires_in, $sso_epoch) {
     _purge_expired();
     my $code = _random_code();
     $codes{$code} = {
         jwt           => $jwt,
         refresh_token => $refresh_token,
         expires_in    => $expires_in,
+        sso_epoch     => $sso_epoch,
         client_id     => $client_id,
         redirect_uri  => $redirect_uri,
         expires_at    => time + CODE_TTL,
@@ -93,6 +124,18 @@ sub _issue_code_and_redirect ($c, $client_id, $redirect_uri, $state, $jwt, $refr
 # per-app login.
 sub _establish_session ($c, $jwt, $refresh_token, $email) {
     $c->session(jwt => $jwt, refresh_token => $refresh_token, email => $email);
+}
+
+# Starts a brand new "session epoch" — called only on a genuine
+# credential-based login, never on a silent token refresh (the epoch
+# represents the session's identity, not its current token; regenerating
+# it on every refresh would make every consuming app think the session
+# changed and force a needless re-login).
+sub _start_new_epoch ($c) {
+    my $epoch = _random_code();
+    $c->session(sso_epoch => $epoch);
+    _set_epoch_cookie($c, $epoch);
+    return $epoch;
 }
 
 # GET /oauth/authorize?response_type=code&client_id=...&redirect_uri=...&state=...
@@ -118,10 +161,13 @@ sub authorize ($c) {
             return _issue_code_and_redirect(
                 $c, $client_id, $redirect_uri, $state,
                 $jwt, $c->session('refresh_token'), _jwt_expires_in($jwt),
+                $c->session('sso_epoch'),
             );
         }
 
         # JWT's expired/invalid — try a silent refresh before giving up.
+        # The epoch is deliberately left unchanged — this is the same
+        # logical session continuing, not a new one.
         if (my $refresh_token = $c->session('refresh_token')) {
             my $result = $c->api->refresh($refresh_token);
             if ($result->{success}) {
@@ -129,6 +175,7 @@ sub authorize ($c) {
                 return _issue_code_and_redirect(
                     $c, $client_id, $redirect_uri, $state,
                     $result->{token}, $result->{refresh_token}, $result->{expires_in},
+                    $c->session('sso_epoch'),
                 );
             }
         }
@@ -189,9 +236,11 @@ sub authorize_submit ($c) {
     }
 
     _establish_session($c, $result->{token}, $result->{refresh_token}, $email);
+    my $epoch = _start_new_epoch($c);
     _issue_code_and_redirect(
         $c, $client_id, $redirect_uri, $state,
         $result->{token}, $result->{refresh_token}, $result->{expires_in},
+        $epoch,
     );
 }
 
@@ -225,6 +274,7 @@ sub token ($c) {
         refresh_token => $entry->{refresh_token},
         token_type    => 'Bearer',
         expires_in    => $entry->{expires_in},
+        sso_epoch     => $entry->{sso_epoch},
     });
 }
 
@@ -251,6 +301,10 @@ sub logout ($c) {
         eval { $c->api->revoke($refresh_token) };
     }
     $c->session(expires => 1);
+    # Clears the cross-app epoch cookie — this is what makes logout
+    # propagate immediately to every other app under the shared domain,
+    # not just this one, on their very next request.
+    _clear_epoch_cookie($c);
 
     my $redirect_uri = $c->param('redirect_uri');
     if ($redirect_uri && _origin_allowed($c, $redirect_uri)) {

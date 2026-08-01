@@ -109,6 +109,19 @@ for
 registered client skips the login form entirely and redirects straight
 back with a fresh authorization code \- this is what makes repeat/
 cross-app logins invisible instead of showing a form every time.
+.TP
+.B cookie_domain
+Optional. Scopes a separate, unsigned "session epoch" marker cookie
+.RI ( homelab-sso-epoch )
+to this domain (e.g.
+.IR mailmasker.org )
+instead of just this host, so every consuming app under it sees a logout
+happen on their very next request \- this is what makes logging out of
+one app immediately kill every other app's session too, not just this
+service's own. Only meaningful when every consuming app actually lives
+under the same parent domain. Unset by default (the marker cookie is then
+host-only, same as before this feature existed); consuming apps that
+never see a matching cookie simply never trip the check.
 .SS clients
 A list of OAuth2 clients permitted to use this SSO service. Each entry
 has:

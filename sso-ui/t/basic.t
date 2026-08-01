@@ -50,4 +50,31 @@ $t->get_ok('/logout?redirect_uri=https://evil.example/steal')
   ->status_is(200)
   ->text_like('p', qr/logged out/i);
 
+# A real login issues an sso_epoch, and logout clears the epoch cookie
+# (Set-Cookie with an immediate expiry) so every consuming app under the
+# shared domain sees the very next request as logged out.
+SKIP: {
+    skip 'requires a real homelab-api login backend', 1
+        unless $ENV{HOMELAB_SSO_UI_TEST_LIVE_LOGIN};
+
+    $t->post_ok('/oauth/authorize', form => {
+        client_id    => 'roundcube',
+        redirect_uri => 'https://mail.example.com/index.php?_task=login&_action=oauth',
+        state        => 's1',
+        email        => 'user@example.com',
+        password     => 'correcthorse',
+    });
+    my $code = ($t->tx->res->headers->location =~ /code=([^&]+)/)[0];
+    $t->post_ok('/oauth/token', form => {
+        grant_type    => 'authorization_code',
+        code          => $code,
+        client_id     => 'roundcube',
+        client_secret => 'testsecret',
+        redirect_uri  => 'https://mail.example.com/index.php?_task=login&_action=oauth',
+    })->json_has('/sso_epoch');
+
+    $t->get_ok('/logout?redirect_uri=https://mail.example.com/')
+      ->header_like('Set-Cookie', qr/homelab-sso-epoch=;/);
+}
+
 done_testing;

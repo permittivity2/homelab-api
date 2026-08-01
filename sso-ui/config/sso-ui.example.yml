@@ -26,6 +26,15 @@ session:
   expiry: 2592000   # 30 days in seconds — matches homelab-api's refresh
                      # token lifetime, since that's the real ceiling on how
                      # long a session can silently renew itself anyway
+  # cookie_domain: mailmasker.org
+  # Scopes the cross-app "session epoch" marker cookie (homelab-sso-epoch)
+  # to the whole parent domain instead of just this host, so every
+  # consuming app under it (Roundcube, Drive, ...) sees a logout happen on
+  # their very next request — this is what makes logging out of one app
+  # immediately kill the others' sessions too, not just this service's own.
+  # Only makes sense when every consuming app actually lives under the
+  # same parent domain; leave unset (host-only cookie, today's behavior)
+  # for local/dev testing or a deployment where that isn't true.
 
 # OAuth2 clients allowed to use this SSO service. Each consumer (Roundcube,
 # and later the Drive web UI) needs its own entry here.
