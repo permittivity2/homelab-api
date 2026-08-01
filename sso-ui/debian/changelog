@@ -1,5 +1,11 @@
 homelab-sso-ui (0.1.0) unstable; urgency=medium
 
+  * Release v0.1.0
+
+ -- Gardner <gardner@homelab>  Sat, 01 Aug 2026 14:54:42 -0500
+
+homelab-sso-ui (0.1.0) unstable; urgency=medium
+
   * Initial release: OAuth2 authorization-code SSO service wrapping
     homelab-api's login/JWT flow (issue #012).
 
