@@ -1,3 +1,9 @@
+homelab-sso-ui (0.2.0) unstable; urgency=medium
+
+  * Release v0.2.0
+
+ -- Gardner <gardner@homelab>  Sat, 01 Aug 2026 16:33:39 -0500
+
 homelab-sso-ui (0.1.1) unstable; urgency=medium
 
   * Release v0.1.1
