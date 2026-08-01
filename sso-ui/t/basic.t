@@ -40,4 +40,14 @@ $t->get_ok('/oauth/userinfo')
   ->status_is(401)
   ->json_is('/error', 'Token required');
 
+# logout with no redirect_uri renders the fallback page
+$t->get_ok('/logout')
+  ->status_is(200)
+  ->text_like('p', qr/logged out/i);
+
+# logout refuses to redirect to an origin that isn't a registered client's
+$t->get_ok('/logout?redirect_uri=https://evil.example/steal')
+  ->status_is(200)
+  ->text_like('p', qr/logged out/i);
+
 done_testing;

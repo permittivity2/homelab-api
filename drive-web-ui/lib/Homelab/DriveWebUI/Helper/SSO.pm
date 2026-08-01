@@ -26,6 +26,16 @@ sub authorize_url ($self, $state) {
     return $url;
 }
 
+# Builds the SSO single-logout URL — clears the shared IdP session and
+# redirects back to $redirect_uri (which must match this client's own
+# registered redirect_uri's origin, or homelab-sso-ui falls back to its
+# own generic logged-out page instead).
+sub logout_url ($self, $redirect_uri) {
+    my $url = Mojo::URL->new($self->base_url . '/logout');
+    $url->query->append(redirect_uri => $redirect_uri);
+    return $url;
+}
+
 # POST /oauth/token — exchanges an authorization code for a token. Returns
 # the decoded JSON body (access_token/refresh_token/expires_in/...).
 sub exchange_code ($self, $code) {

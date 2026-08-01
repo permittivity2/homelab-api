@@ -49,6 +49,24 @@ sub _purge_expired {
     delete $codes{$_} for grep { $codes{$_}{expires_at} < $now } keys %codes;
 }
 
+# Is the given URL's origin (scheme+host+port) one of our registered
+# clients' redirect_uri origins? Looser than the OAuth redirect_uri check
+# (which requires an exact match) — a sensible post-logout landing page
+# reasonably differs in path from the OAuth callback path (e.g.
+# Roundcube's callback is /index.php?... but its post-logout target is
+# just /). This is what stands between /logout and being an open redirect.
+sub _origin_allowed ($c, $url) {
+    my $target = Mojo::URL->new($url);
+    return 0 unless $target->scheme && $target->host;
+    for my $client (@{ $c->oauth_clients }) {
+        my $reg = Mojo::URL->new($client->{redirect_uri});
+        return 1 if $reg->scheme eq $target->scheme
+            && $reg->host eq $target->host
+            && ($reg->port // '') eq ($target->port // '');
+    }
+    return 0;
+}
+
 # Mints a one-time code for the given tokens and redirects the browser back
 # to the client with it — shared by both the "already has an IdP session"
 # fast path and the "just typed a password" path.
@@ -221,6 +239,25 @@ sub userinfo ($c) {
     my $result = $c->api->introspect($jwt);
     my $status = delete $result->{_status} // 401;
     return $c->render(json => $result, status => $status);
+}
+
+# GET /logout?redirect_uri=... — single logout. Clears the IdP session
+# (which is what actually matters: without it, both consuming apps'
+# auto-redirect-on-unauthenticated behavior would otherwise silently log
+# the user right back in) and best-effort revokes whichever refresh token
+# was cached in it.
+sub logout ($c) {
+    if (my $refresh_token = $c->session('refresh_token')) {
+        eval { $c->api->revoke($refresh_token) };
+    }
+    $c->session(expires => 1);
+
+    my $redirect_uri = $c->param('redirect_uri');
+    if ($redirect_uri && _origin_allowed($c, $redirect_uri)) {
+        return $c->redirect_to($redirect_uri);
+    }
+
+    $c->render(template => 'oauth/logged_out', layout => 'login');
 }
 
 1;

@@ -60,7 +60,11 @@ sub _random_state {
 sub logout ($c) {
     eval { $c->api->post('/api/v1/auth/logout', {}) };
     $c->session(expires => 1);
-    $c->redirect_to('/login');
+    # Route through SSO's single-logout endpoint so the *shared* IdP
+    # session is cleared too — otherwise landing back on /login would
+    # immediately auto-redirect through SSO and silently log the user
+    # right back in, since that session would still be alive.
+    $c->redirect_to($c->sso->logout_url($c->sso->redirect_uri));
 }
 
 1;

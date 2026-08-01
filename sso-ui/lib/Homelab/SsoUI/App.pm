@@ -59,6 +59,7 @@ sub startup ($self) {
     $r->post('/oauth/authorize')->to('oauth#authorize_submit');
     $r->post('/oauth/token')->to('oauth#token');
     $r->get('/oauth/userinfo')->to('oauth#userinfo');
+    $r->get('/logout')->to('oauth#logout');
 }
 
 1;

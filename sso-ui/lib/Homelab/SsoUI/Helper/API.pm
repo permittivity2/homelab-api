@@ -39,6 +39,17 @@ sub refresh ($self, $refresh_token) {
     return $self->_decode($tx);
 }
 
+# POST /api/v1/auth/logout, passing the refresh token as the
+# `homelab-token` cookie — revokes it server-side. Best-effort; callers
+# should not block on this failing.
+sub revoke ($self, $refresh_token) {
+    my $tx = $self->_ua->post(
+        $self->base_url . '/api/v1/auth/logout',
+        { Cookie => "homelab-token=$refresh_token" },
+    );
+    return $self->_decode($tx);
+}
+
 sub _decode ($self, $tx) {
     my $res = $tx->result;
     if (my $err = $tx->error) {

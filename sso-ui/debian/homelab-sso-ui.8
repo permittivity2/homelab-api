@@ -13,6 +13,8 @@ systemd unit; not normally invoked directly)
 .B homelab-sso-ui
 implements a small OAuth2 authorization-code flow
 .RI ( /oauth/authorize ", " /oauth/token ", " /oauth/userinfo )
+plus a single-logout endpoint
+.RI ( /logout )
 as a thin wrapper around
 .BR homelab-api (8) 's
 existing login and JWT machinery. The OAuth "access_token" issued to
@@ -21,15 +23,28 @@ clients
 the homelab-api JWT itself \- this service does not mint a separate
 token. It does cache the JWT and refresh token in its own signed IdP
 session cookie (see SS session in CONFIGURATION) so a user who already
-authenticated once can skip the login form on subsequent requests, and
-mints a short-lived (60 second), one-time authorization code per
-request, held in memory.
+authenticated once can skip the login form on subsequent requests \-
+including for a
+.B different
+consuming app than the one just used, which is what makes this real
+cross-app single sign-on \- and mints a short-lived (60 second), one-time
+authorization code per request, held in memory.
 .P
-Consumers (Roundcube, and eventually
+Consumers (Roundcube and
 .BR homelab-drive-web-ui )
-delegate their login screens to this service instead of checking
-credentials themselves. Roundcube in particular has native OAuth2 login
+delegate their login
+.B and logout
+screens to this service instead of checking credentials or managing
+sessions themselves. Roundcube in particular has native OAuth2 login
 support that works against this service with no custom plugin.
+.B /logout
+clears the IdP session (so both consumers' auto-redirect-on-unauthenticated
+behavior doesn't silently log the user right back in) and redirects to a
+caller-supplied
+.I redirect_uri
+\- restricted to origins matching a registered client's own
+.B redirect_uri
+to prevent it being used as an open redirect.
 .P
 It runs as a Mojolicious application under Hypnotoad and is managed via
 systemd; it is not intended to be run interactively.

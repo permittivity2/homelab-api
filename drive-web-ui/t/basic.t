@@ -27,4 +27,10 @@ $t->get_ok('/login?code=bogus&state=bogus')
   ->status_is(302)
   ->header_like(Location => qr{/oauth/authorize});
 
+# Logout redirects through SSO's single-logout endpoint (not straight back
+# to /login) so the shared IdP session actually gets cleared too
+$t->post_ok('/logout')
+  ->status_is(302)
+  ->header_like(Location => qr{/logout\?.*redirect_uri=});
+
 done_testing;
