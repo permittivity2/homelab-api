@@ -59,6 +59,21 @@ subtest 'Validate endpoint' => sub {
     };
 };
 
+subtest 'Introspect endpoint' => sub {
+    subtest 'Missing token' => sub {
+        $t->get_ok('/api/v1/auth/introspect')
+            ->status_is(401)
+            ->json_is('/error', 'Token required');
+    };
+
+    subtest 'Invalid token' => sub {
+        $t->get_ok('/api/v1/auth/introspect', {
+            'Authorization' => 'Bearer invalid.token.here'
+        })->status_is(401)
+            ->json_is('/error', 'Invalid or expired token');
+    };
+};
+
 subtest 'Logout endpoint' => sub {
     subtest 'Missing refresh token' => sub {
         $t->post_ok('/api/v1/auth/logout')

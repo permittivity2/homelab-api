@@ -1,0 +1,65 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    configure)
+        echo "Homelab SSO UI post-installation setup..."
+
+        # Create homelab user/group if absent (shared with the other homelab-* services)
+        if ! getent group homelab >/dev/null 2>&1; then
+            groupadd -f homelab || true
+        fi
+        if ! getent passwd homelab >/dev/null 2>&1; then
+            useradd -r -g homelab -d /var/lib/homelab -s /usr/sbin/nologin homelab || true
+        fi
+
+        # Config directory — never overwrite an existing config on upgrade
+        if [ ! -d /etc/homelab/sso-ui ]; then
+            mkdir -p /etc/homelab/sso-ui
+            chown homelab:homelab /etc/homelab/sso-ui
+            chmod 750 /etc/homelab/sso-ui
+        fi
+
+        if [ ! -f /etc/homelab/sso-ui/config.yml ]; then
+            cp /usr/share/homelab-sso-ui/config/sso-ui.example.yml \
+               /etc/homelab/sso-ui/config.yml
+            chown homelab:homelab /etc/homelab/sso-ui/config.yml
+            chmod 640 /etc/homelab/sso-ui/config.yml
+            echo ""
+            echo "*** IMPORTANT: Edit /etc/homelab/sso-ui/config.yml ***"
+            echo "    - Set homelab_api.base_url"
+            echo "    - Register each OAuth client (client_id/client_secret/redirect_uri)"
+            echo "    - Verify server.listen"
+            echo ""
+        fi
+
+        # Shared state directory
+        if [ ! -d /var/lib/homelab ]; then
+            mkdir -p /var/lib/homelab
+            chown homelab:homelab /var/lib/homelab
+            chmod 750 /var/lib/homelab
+        fi
+
+        # Systemd
+        if systemctl is-enabled homelab-sso-ui >/dev/null 2>&1; then
+            systemctl restart homelab-sso-ui || systemctl start homelab-sso-ui
+        else
+            systemctl enable homelab-sso-ui
+            systemctl start homelab-sso-ui || true
+        fi
+
+        echo "Homelab SSO UI installed."
+        echo "Check status: systemctl status homelab-sso-ui"
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,118 @@
+.TH HOMELAB-SSO-UI 8 "2026-07-31" "homelab-sso-ui" "System Administration"
+.SH NAME
+homelab-sso-ui \- Homelab SSO login service
+.SH SYNOPSIS
+.B homelab-sso-ui
+.br
+(started via
+.B hypnotoad
+under the
+.B homelab-sso-ui.service
+systemd unit; not normally invoked directly)
+.SH DESCRIPTION
+.B homelab-sso-ui
+implements a small OAuth2 authorization-code flow
+.RI ( /oauth/authorize ", " /oauth/token ", " /oauth/userinfo )
+as a thin wrapper around
+.BR homelab-api (8) 's
+existing login and JWT machinery. The OAuth "access_token" issued to
+clients
+.B is
+the homelab-api JWT itself \- this service does not mint or persist its
+own tokens beyond a short-lived (60 second), one-time authorization code
+held in memory.
+.P
+Consumers (Roundcube, and eventually
+.BR homelab-drive-web-ui )
+delegate their login screens to this service instead of checking
+credentials themselves. Roundcube in particular has native OAuth2 login
+support that works against this service with no custom plugin.
+.P
+It runs as a Mojolicious application under Hypnotoad and is managed via
+systemd; it is not intended to be run interactively.
+.SH FILES
+.TP
+.I /etc/homelab/sso-ui/config.yml
+Main configuration file (YAML). See CONFIGURATION below.
+.SH ENVIRONMENT
+.TP
+.B HOMELAB_SSO_UI_CONFIG
+Overrides the path to the configuration file (default
+.IR /etc/homelab/sso-ui/config.yml ).
+Set by the shipped systemd unit.
+.TP
+.B HOMELAB_SSO_UI_HOME
+Overrides the base directory used to locate templates
+.RI ( templates/ )
+and static assets
+.RI ( public/ ).
+Default:
+.IR /usr/share/homelab-sso-ui .
+Set by the shipped systemd unit; useful for running from a source
+checkout during development.
+.SH CONFIGURATION
+.SS homelab_api
+.TP
+.B base_url
+Base URL of the
+.B homelab-api
+instance this service authenticates users against and validates tokens
+through. No default \- required.
+.SS clients
+A list of OAuth2 clients permitted to use this SSO service. Each entry
+has:
+.TP
+.B client_id
+Identifier the client sends in
+.I /oauth/authorize
+and
+.IR /oauth/token .
+.TP
+.B client_secret
+Shared secret the client must present at
+.I /oauth/token
+to exchange an authorization code for a token. No default \- required
+per client; use a long random value.
+.TP
+.B redirect_uri
+The exact URI this service will redirect back to after a successful
+login for this client. Requests naming a
+.B client_id
+whose registered
+.B redirect_uri
+does not match exactly are rejected before any login form is shown.
+.SS server
+Hypnotoad listen/worker configuration.
+.TP
+.B listen
+Full listen URL, e.g.
+.IR http://0.0.0.0:2502 .
+Default:
+.IR http://127.0.0.1:2502 .
+Deliberately different from
+.BR homelab-api 's
+default
+.RI ( 3000 )
+and
+.BR homelab-drive-web-ui 's
+default
+.RI ( 2501 ),
+so all three can coexist on one host (e.g. for local/dev testing)
+without a port collision.
+.TP
+.B workers
+Number of Hypnotoad worker processes. Default:
+.IR 1 .
+.B Must stay at 1
+unless the in-memory one-time authorization code store is replaced with
+a shared backing store \- a code minted by one worker process is not
+visible to another.
+.TP
+.B pid_file
+Path to the Hypnotoad PID file. Default:
+.IR /var/lib/homelab/sso-ui-hypnotoad.pid .
+.SH SEE ALSO
+.BR homelab-api (8)
+.P
+Full example configuration:
+.I /usr/share/homelab-sso-ui/config/sso-ui.example.yml

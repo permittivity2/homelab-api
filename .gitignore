@@ -26,6 +26,17 @@ processor/debian/files
 processor/debian/*.substvars
 processor/debian/*.debhelper.log
 processor/debian/*.debhelper
+sso-ui/debian/homelab-sso-ui/
+sso-ui/debian/.debhelper/
+sso-ui/debian/debhelper-build-stamp
+sso-ui/debian/files
+sso-ui/debian/*.substvars
+sso-ui/debian/*.debhelper.log
+sso-ui/debian/*.debhelper
+sso-ui/blib/
+sso-ui/Makefile
+sso-ui/MYMETA.*
+sso-ui/pm_to_blib
 *.deb
 *.buildinfo
 *.changes

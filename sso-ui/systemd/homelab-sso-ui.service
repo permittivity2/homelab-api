@@ -1,0 +1,23 @@
+[Unit]
+Description=Homelab SSO UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=homelab
+Group=homelab
+WorkingDirectory=/var/lib/homelab
+Environment="HOMELAB_SSO_UI_CONFIG=/etc/homelab/sso-ui/config.yml"
+Environment="HOMELAB_SSO_UI_HOME=/usr/share/homelab-sso-ui"
+ExecStart=/usr/bin/hypnotoad -f /usr/bin/homelab-sso-ui
+ExecStop=/usr/bin/hypnotoad -s /usr/bin/homelab-sso-ui
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=homelab-sso-ui
+
+[Install]
+WantedBy=multi-user.target

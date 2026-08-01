@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=perl_makemaker
+
+override_dh_auto_test:
+
+override_dh_install:
+	dh_install
+	# Systemd service unit
+	install -D -m 644 systemd/homelab-sso-ui.service \
+		debian/homelab-sso-ui/etc/systemd/system/homelab-sso-ui.service
+	# Templates and public assets — installed to /usr/share/homelab-sso-ui/
+	find templates -type f -exec install -D -m 644 {} \
+		debian/homelab-sso-ui/usr/share/homelab-sso-ui/{} \;
+	find public -type f -exec install -D -m 644 {} \
+		debian/homelab-sso-ui/usr/share/homelab-sso-ui/{} \;
+	find config -type f -exec install -D -m 644 {} \
+		debian/homelab-sso-ui/usr/share/homelab-sso-ui/{} \;

@@ -1,0 +1,27 @@
+# Homelab SSO UI Configuration
+#
+# Implements a small OAuth2 authorization-code flow (/oauth/authorize,
+# /oauth/token, /oauth/userinfo) as a thin wrapper around homelab-api's
+# existing login/JWT machinery. The OAuth "access_token" issued to clients
+# IS the homelab-api JWT — this service does not mint or store its own
+# tokens beyond a short-lived, one-time authorization code.
+
+homelab_api:
+  base_url: https://api.example.com
+
+# OAuth2 clients allowed to use this SSO service. Each consumer (Roundcube,
+# and later the Drive web UI) needs its own entry here.
+clients:
+  - client_id: roundcube
+    client_secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+    redirect_uri: "https://mail.example.com/index.php/login/oauth"
+
+server:
+  # Default port (2502) is deliberately different from homelab-api (3000)
+  # and homelab-drive-web-ui (2501) so all three can run on one host (e.g.
+  # local/dev/test) without colliding, even though production runs each on
+  # its own VM (sso01/api01/drive01).
+  listen:   "http://0.0.0.0:2502"
+  workers:  1   # one-time auth codes are stored in-process; keep at 1 unless
+                # a shared (non-in-memory) code store is added
+  pid_file: /var/lib/homelab/sso-ui-hypnotoad.pid

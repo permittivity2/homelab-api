@@ -1,0 +1,19 @@
+Source: homelab-sso-ui
+Section: web
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13), perl (>= 5.40)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-sso-ui
+Architecture: all
+Depends: perl (>= 5.36),
+         libmojolicious-perl,
+         libyaml-libyaml-perl
+Description: SSO login service for Homelab services
+ A small Mojolicious application implementing an OAuth2 authorization-code
+ flow (/oauth/authorize, /oauth/token, /oauth/userinfo) as a thin wrapper
+ around homelab-api's existing login/JWT machinery. Lets other services
+ (Roundcube, homelab-drive-web-ui) delegate login to a single identity
+ provider instead of checking credentials themselves.

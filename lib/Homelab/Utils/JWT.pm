@@ -11,7 +11,7 @@ our @EXPORT_OK = qw(generate_token verify_token generate_refresh_token);
 
 sub generate_token {
     my ($config, $email, $expires_in) = @_;
-    $expires_in ||= $config->{jwt}{expires_in} || 1800;
+    $expires_in ||= $config->{jwt}{expiry_seconds} || 1800;
 
     my $now = time;
     my $exp = int($now) + $expires_in;

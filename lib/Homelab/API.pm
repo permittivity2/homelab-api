@@ -146,6 +146,28 @@ get '/api/v1/auth/validate' => sub ($c) {
     );
 };
 
+# Flat-JSON token introspection for external services that can't parse the
+# nested /validate response — Dovecot's oauth2 passdb (introspection_mode =
+# auth) and Roundcube's oauth_identity_uri both expect a plain top-level
+# attribute (default "email").
+get '/api/v1/auth/introspect' => sub ($c) {
+    my $auth_header = $c->req->headers->authorization;
+    my $token;
+
+    if ($auth_header && $auth_header =~ /^Bearer\s+(.+)$/) {
+        $token = $1;
+    }
+
+    return _set_json_response($c, { error => 'Token required' }, 401)
+        unless $token;
+
+    my $result = $auth->validate($token);
+    return _set_json_response($c, { error => $result->{error} }, 401)
+        if $result->{error};
+
+    return _set_json_response($c, { email => $result->{user}{email} }, 200);
+};
+
 post '/api/v1/auth/refresh' => sub ($c) {
     my $refresh_token = $c->cookie('homelab-token');
 
