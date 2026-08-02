@@ -395,7 +395,10 @@ const DriveUI = (() => {
   function handleFileSelect(input) {
     if (input.files.length) {
       uploadFiles(input.files);
-      input.value = '';
+      // Deferred to a macrotask: for large files, clearing .value here
+      // synchronously can race the browser still reading the FileList to
+      // stream the upload body, sending an empty 0-byte body instead.
+      setTimeout(() => { input.value = ''; }, 0);
     }
   }
 

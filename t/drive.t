@@ -76,6 +76,15 @@ subtest 'upload and list files' => sub {
     ok(scalar(@$files) > 0, 'file appears in list');
 };
 
+subtest 'reject empty upload' => sub {
+    $t->post_ok('/api/v1/drive/files',
+        { Authorization => "Bearer $token" },
+        form => { file => { content => '', filename => 'empty.mp4' } })
+        ->status_is(400);
+
+    like($t->tx->res->json->{error}, qr/empty/i, 'error mentions empty file');
+};
+
 subtest 'download file' => sub {
     # First create a file
     $t->post_ok('/api/v1/drive/files',
