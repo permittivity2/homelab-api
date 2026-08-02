@@ -116,6 +116,16 @@ sub upload {
         $file_size = -s $disk_path;
     }
 
+    # A 0-byte result means the client's multipart body was empty even
+    # though a filename/content-type were sent — seen in production from a
+    # browser-side race that clears the file input while a large upload is
+    # still being read. Reject rather than silently creating a permanent
+    # broken "ghost" file record (see issue #007).
+    if (!$file_size) {
+        unlink $disk_path;
+        return { error => 'Uploaded file is empty (0 bytes) — the upload may have been interrupted, please try again' };
+    }
+
     # Auto-rename if a file with this name already exists: file.txt → file (1).txt → file (2).txt ...
     my ($base, $ext) = ($file_name =~ /^(.+?)(\.[^.]+)$/)
                      ? ($1, $2)
