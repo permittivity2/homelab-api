@@ -1,3 +1,9 @@
+homelab-drive-web-ui (0.2.3) unstable; urgency=medium
+
+  * Release v0.2.3
+
+ -- Gardner <gardner@homelab>  Sun, 02 Aug 2026 00:40:46 -0500
+
 homelab-drive-web-ui (0.2.2) unstable; urgency=medium
 
   * Release v0.2.2
