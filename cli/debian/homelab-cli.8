@@ -1,0 +1,167 @@
+.TH HOMELAB-CLI 8 "2026-08-09" "homelab-cli" "System Administration"
+.SH NAME
+homelab-cli \- command-line client for the Homelab API
+.SH SYNOPSIS
+.B homelab-cli
+.RB [ --api-url
+.IR url ]
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B homelab-cli
+is a scripting client for the
+.BR homelab-api (8)
+REST API. It is intended for use by an account holding the
+.I site_admin
+role, though most subcommands work for any authenticated account
+according to that account's own role permissions.
+.P
+Every REST call is exposed as its own flat subcommand (a "bareword"),
+e.g.
+.BR quota ", " list-directories ", " admin-reset-password .
+There are no nested command groups.
+.P
+.B homelab-cli login
+saves a session (JWT and refresh token) to a local file. Every other
+command loads that session automatically and transparently refreshes
+the JWT if it has expired, so a single login is normally good for the
+life of the refresh token (30 days server-side), not just one hour.
+.SH OPTIONS
+.TP
+.BI --api-url " url"
+Use
+.I url
+as the API base URL for this invocation only. This is never written to
+the cached configuration \- use
+.B configure --set-api-url
+to change the cached value permanently.
+.TP
+.B -h ", " --help
+Show a list of all commands (or, given after a command name, that
+command's own arguments). Every command has full
+.B --help
+text; this man page intentionally does not duplicate per-command flag
+documentation \- run
+.RI "\(lqhomelab-cli " command " --help\(rq"
+for that.
+.SH COMMANDS
+.SS "Session & configuration"
+.TP
+.B login
+Log in and save a session for later commands. Prompts for email/password
+interactively (password via a hidden prompt \- there is no
+.B --password
+flag, so a credential can never leak into shell history or
+.BR ps (1)
+output).
+.TP
+.B logout
+Revoke the current refresh token on the server and clear the local session.
+.TP
+.B configure
+View or permanently change the cached API base URL.
+.SS "Auth & health"
+.TP
+.BR validate ", " introspect ", " refresh ", " health
+Check the current JWT, get the email bound to it, manually force a
+refresh, or check API/database health (no auth required for
+.BR health ).
+.SS "Drive \- public shares (no auth)"
+.TP
+.BR share-meta ", " share-dir ", " share-download
+Read metadata for a public file or directory share link, or download
+the shared file directly.
+.SS "Drive \- files and directories"
+.TP
+.BR quota ", " file-info ", " upload-file ", " file-meta ", " download-file
+.TQ
+.BR trash-file ", " move-file ", " copy-file ", " file-versions
+.TQ
+.BR list-trash ", " restore-file ", " empty-trash ", " trash-dir
+.TQ
+.BR list-directories ", " create-directory ", " delete-directory ", " update-directory
+Usage/quota, file and directory CRUD, trash/restore, and version
+listing. See
+.RI "\(lqhomelab-cli " command " --help\(rq"
+for each command's arguments.
+.SS "Drive \- sharing and bulk operations"
+.TP
+.BR share-file ", " share-directory ", " list-shares ", " list-shares-with-me ", " delete-share
+.TQ
+.BR bulk-trash ", " bulk-restore ", " bulk-move ", " bulk-copy ", " create-zip
+Create/list/revoke shares, and operate on multiple files/directories
+in one call.
+.SS "Administration (site_admin only)"
+.TP
+.BR admin-list-roles ", " admin-role-permissions
+List all roles, or the endpoints granted to a specific role.
+.TP
+.BR admin-grant-permission ", " admin-revoke-permission
+Grant or revoke an endpoint (e.g.
+.RI \(lqGET\ /api/v1/drive/quota\(rq )
+on a role.
+.TP
+.BR admin-user-roles ", " admin-grant-role ", " admin-revoke-role
+List, assign, or revoke a role on a specific user account.
+.TP
+.B admin-reset-password
+Reset a user's password to a randomly generated dictionary passphrase.
+Never accepts a client-supplied password \- the new passphrase is
+generated server-side and printed exactly once in the response. It is
+not recoverable afterward; if lost, reset again.
+.TP
+.BR admin-revoke-tokens ", " admin-force-relogin
+Revoke all of a user's refresh tokens, forcing re-login on their next
+token refresh. Both commands perform the identical action against two
+distinct server endpoints of the same name \- pick whichever name reads
+better in context.
+.SH FILES
+.TP
+.I ~/.config/homelab-cli/config.json
+Cached API base URL. Mode 0600.
+.TP
+.I ~/.config/homelab-cli/session.json
+JWT and refresh token from the last successful
+.BR login .
+Mode 0600. This file contains a live bearer credential \- treat it like
+an SSH private key. Deleted by
+.BR logout .
+.SH ENVIRONMENT
+None. All configuration is via the files above or the
+.B --api-url
+flag; there are no environment variables this tool reads.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An API call failed (authentication, authorization, validation, or a
+server error), or the local session/config could not be read as
+expected.
+.TP
+.B 2
+Argument parsing error (invalid or missing command-line arguments) \-
+standard
+.BR argparse (3)
+behavior.
+.TP
+.B 130
+Interrupted (Ctrl-C).
+.SH SECURITY CONSIDERATIONS
+.I session.json
+holds a live bearer credential capable of acting as the logged-in
+account, including any
+.I site_admin
+privileges that account holds. Protect it accordingly \- it is created
+mode 0600, but back up your own vigilance (e.g. don't copy your
+.I ~/.config/homelab-cli
+directory into a shared location or a public dotfiles repository).
+.B admin-*
+commands additionally require the logged-in account to hold the
+.I site_admin
+role server-side; the CLI does not enforce this locally, the server does.
+.SH SEE ALSO
+.BR homelab-api (8)
+.SH AUTHOR
+Jeff Gardner <mailmasker-api01@forge.name>

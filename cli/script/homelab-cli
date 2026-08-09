@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""Command-line client for the Homelab API.
+
+Wraps every homelab-api REST endpoint as a flat subcommand. Persists a
+login session (JWT + refresh token) under ~/.config/homelab-cli/ and
+transparently refreshes an expired JWT on the caller's behalf.
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+CONFIG_DIR = Path.home() / ".config" / "homelab-cli"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+SESSION_PATH = CONFIG_DIR / "session.json"
+
+
+# ---------------------------------------------------------------------------
+# Config / session file handling
+# ---------------------------------------------------------------------------
+
+def _secure_write_json(path, data):
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def _read_json(path):
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_config():
+    return _read_json(CONFIG_PATH) or {}
+
+
+def save_config(data):
+    _secure_write_json(CONFIG_PATH, data)
+
+
+def load_session():
+    return _read_json(SESSION_PATH)
+
+
+def save_session(data):
+    _secure_write_json(SESSION_PATH, data)
+
+
+def clear_session():
+    try:
+        SESSION_PATH.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def resolve_api_url(args):
+    if getattr(args, "api_url", None):
+        return args.api_url.rstrip("/")
+
+    config = load_config()
+    if config.get("api_url"):
+        return config["api_url"].rstrip("/")
+
+    url = input("Enter the homelab-api base URL (e.g. https://api.mailmasker.org): ").strip()
+    url = url.rstrip("/")
+    if not url.startswith("http://") and not url.startswith("https://"):
+        print("error: URL must start with http:// or https://", file=sys.stderr)
+        sys.exit(1)
+    config["api_url"] = url
+    save_config(config)
+    return url
+
+
+def get_session_or_die():
+    session = load_session()
+    if not session:
+        print("Not logged in. Run 'homelab-cli login' first.", file=sys.stderr)
+        sys.exit(1)
+    return session
+
+
+# ---------------------------------------------------------------------------
+# HTTP layer
+# ---------------------------------------------------------------------------
+
+def _do_refresh(args):
+    """Attempt one refresh using the cached refresh_token. Returns the new
+    session dict on success, or None on failure (caller decides what to do)."""
+    session = load_session()
+    if not session or not session.get("refresh_token"):
+        return None
+
+    api_url = resolve_api_url(args)
+    resp = requests.post(
+        f"{api_url}/api/v1/auth/refresh",
+        cookies={"homelab-token": session["refresh_token"]},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return None
+
+    body = resp.json()
+    new_session = dict(session)
+    new_session["token"] = body["token"]
+    new_session["refresh_token"] = body["refresh_token"]
+    new_session["expires_in"] = body["expires_in"]
+    new_session["obtained_at"] = time.time()
+    save_session(new_session)
+    return new_session
+
+
+def _request(args, method, path, *, auth=True, is_refresh_retry=False, **kwargs):
+    """Shared HTTP wrapper. All subcommands go through this. Handles base
+    URL resolution and transparent refresh-on-401 (exactly one retry)."""
+    api_url = resolve_api_url(args)
+    url = f"{api_url}{path}"
+
+    headers = kwargs.pop("headers", {}) or {}
+    if auth:
+        session = get_session_or_die()
+        headers["Authorization"] = f"Bearer {session['token']}"
+
+    resp = requests.request(method, url, headers=headers, timeout=60, **kwargs)
+
+    if resp.status_code == 401 and auth and not is_refresh_retry:
+        new_session = _do_refresh(args)
+        if new_session is None:
+            print("Session expired, please run 'homelab-cli login' again.", file=sys.stderr)
+            sys.exit(1)
+        headers["Authorization"] = f"Bearer {new_session['token']}"
+        resp = requests.request(method, url, headers=headers, timeout=60, **kwargs)
+
+    return resp
+
+
+def _print_response(resp):
+    if 200 <= resp.status_code < 300:
+        try:
+            print(json.dumps(resp.json(), indent=2))
+        except ValueError:
+            if resp.text:
+                print(resp.text)
+        return 0
+
+    _die_with_error(resp)
+
+
+def _die_with_error(resp):
+    try:
+        print(json.dumps(resp.json(), indent=2), file=sys.stderr)
+    except ValueError:
+        print(f"HTTP {resp.status_code}: {resp.text}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _save_binary_response(resp, output_path, default_name):
+    if not (200 <= resp.status_code < 300):
+        _die_with_error(resp)
+
+    if output_path is None:
+        disposition = resp.headers.get("Content-Disposition", "")
+        output_path = default_name
+        if "filename=" in disposition:
+            output_path = disposition.split("filename=", 1)[1].strip('"; ')
+
+    total = 0
+    with open(output_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=65536):
+            f.write(chunk)
+            total += len(chunk)
+
+    print(f"Saved to {output_path} ({total} bytes)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Session / config command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_login(args):
+    email = args.email or input("Email: ").strip()
+    import getpass
+    password = getpass.getpass("Password: ")
+
+    api_url = resolve_api_url(args)
+    resp = requests.post(
+        f"{api_url}/api/v1/auth/login",
+        json={"email": email, "password": password},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        _die_with_error(resp)
+
+    body = resp.json()
+    save_session({
+        "token": body["token"],
+        "refresh_token": body["refresh_token"],
+        "expires_in": body["expires_in"],
+        "obtained_at": time.time(),
+        "user": body.get("user", {}),
+    })
+    print(f"Logged in as {email}.")
+    return 0
+
+
+def cmd_logout(args):
+    session = load_session()
+    if session and session.get("refresh_token"):
+        api_url = resolve_api_url(args)
+        try:
+            resp = requests.post(
+                f"{api_url}/api/v1/auth/logout",
+                cookies={"homelab-token": session["refresh_token"]},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                print(f"warning: server logout call failed (HTTP {resp.status_code})", file=sys.stderr)
+        except requests.RequestException as exc:
+            print(f"warning: server logout call failed: {exc}", file=sys.stderr)
+
+    clear_session()
+    print("Logged out.")
+    return 0
+
+
+def cmd_configure(args):
+    config = load_config()
+    if args.set_api_url:
+        url = args.set_api_url.rstrip("/")
+        if not url.startswith("http://") and not url.startswith("https://"):
+            print("error: URL must start with http:// or https://", file=sys.stderr)
+            return 1
+        config["api_url"] = url
+        save_config(config)
+        print(f"API URL set to {url}")
+    else:
+        print(config.get("api_url", "(not set)"))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Auth / health command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_validate(args):
+    return _print_response(_request(args, "GET", "/api/v1/auth/validate"))
+
+
+def cmd_introspect(args):
+    return _print_response(_request(args, "GET", "/api/v1/auth/introspect"))
+
+
+def cmd_refresh(args):
+    new_session = _do_refresh(args)
+    if new_session is None:
+        print("Refresh failed. Run 'homelab-cli login' again.", file=sys.stderr)
+        return 1
+    print(json.dumps({"token": new_session["token"], "expires_in": new_session["expires_in"]}, indent=2))
+    return 0
+
+
+def cmd_health(args):
+    api_url = resolve_api_url(args)
+    resp = requests.get(f"{api_url}/api/v1/health", timeout=30)
+    return _print_response(resp)
+
+
+# ---------------------------------------------------------------------------
+# Drive - public share handlers (no auth)
+# ---------------------------------------------------------------------------
+
+def cmd_share_meta(args):
+    api_url = resolve_api_url(args)
+    resp = requests.get(f"{api_url}/api/v1/drive/s/{args.token}/meta", timeout=30)
+    return _print_response(resp)
+
+
+def cmd_share_dir(args):
+    api_url = resolve_api_url(args)
+    resp = requests.get(f"{api_url}/api/v1/drive/s/{args.token}/dir", timeout=30)
+    return _print_response(resp)
+
+
+def cmd_share_download(args):
+    api_url = resolve_api_url(args)
+    resp = requests.get(f"{api_url}/api/v1/drive/s/{args.token}", timeout=60, stream=True)
+    return _save_binary_response(resp, args.output, f"share-{args.token}.bin")
+
+
+# ---------------------------------------------------------------------------
+# Drive - authenticated handlers
+# ---------------------------------------------------------------------------
+
+def cmd_quota(args):
+    return _print_response(_request(args, "GET", "/api/v1/drive/quota"))
+
+
+def cmd_file_info(args):
+    body = {}
+    if args.path:
+        body["path"] = args.path
+    if args.dir_id:
+        body["dir_id"] = args.dir_id
+    if args.startat is not None:
+        body["startat"] = args.startat
+    if args.recursive:
+        body["recursive"] = args.recursive
+    return _print_response(_request(args, "POST", "/api/v1/drive/fileinfo", json=body))
+
+
+def cmd_upload_file(args):
+    with open(args.file, "rb") as fh:
+        files = {"file": (os.path.basename(args.file), fh)}
+        data = {}
+        if args.dir_id:
+            data["dir_id"] = args.dir_id
+        return _print_response(_request(args, "POST", "/api/v1/drive/files", files=files, data=data))
+
+
+def cmd_file_meta(args):
+    params = {}
+    if args.version:
+        params["version"] = args.version
+    return _print_response(_request(args, "GET", f"/api/v1/drive/files/{args.id}/meta", params=params))
+
+
+def cmd_download_file(args):
+    session = get_session_or_die()
+    api_url = resolve_api_url(args)
+    params = {"version": args.version} if args.version else {}
+    resp = requests.get(
+        f"{api_url}/api/v1/drive/files/{args.id}",
+        headers={"Authorization": f"Bearer {session['token']}"},
+        params=params,
+        timeout=60,
+        stream=True,
+    )
+    return _save_binary_response(resp, args.output, f"file-{args.id}.bin")
+
+
+def cmd_trash_file(args):
+    return _print_response(_request(args, "DELETE", f"/api/v1/drive/files/{args.id}"))
+
+
+def cmd_move_file(args):
+    body = {"to_path": args.to_path} if args.to_path else {"dir_id": args.dir_id}
+    return _print_response(_request(args, "PATCH", f"/api/v1/drive/files/{args.id}", json=body))
+
+
+def cmd_copy_file(args):
+    body = {"to_path": args.to_path} if args.to_path else {"dir_id": args.dir_id}
+    if args.name:
+        body["name"] = args.name
+    return _print_response(_request(args, "POST", f"/api/v1/drive/files/{args.id}/copy", json=body))
+
+
+def cmd_file_versions(args):
+    return _print_response(_request(args, "GET", f"/api/v1/drive/files/{args.id}/versions"))
+
+
+def cmd_list_trash(args):
+    return _print_response(_request(args, "GET", "/api/v1/drive/trash"))
+
+
+def cmd_restore_file(args):
+    return _print_response(_request(args, "POST", f"/api/v1/drive/files/{args.id}/restore"))
+
+
+def cmd_empty_trash(args):
+    return _print_response(_request(args, "DELETE", "/api/v1/drive/trash"))
+
+
+def cmd_trash_dir(args):
+    return _print_response(_request(args, "GET", "/api/v1/drive/trash/dir"))
+
+
+def cmd_list_directories(args):
+    params = {"parent_id": args.parent_id} if args.parent_id else {}
+    return _print_response(_request(args, "GET", "/api/v1/drive/directories", params=params))
+
+
+def cmd_create_directory(args):
+    body = {"name": args.name}
+    if args.parent_id:
+        body["parent_id"] = args.parent_id
+    return _print_response(_request(args, "POST", "/api/v1/drive/directories", json=body))
+
+
+def cmd_delete_directory(args):
+    return _print_response(_request(args, "DELETE", f"/api/v1/drive/directories/{args.id}"))
+
+
+def cmd_update_directory(args):
+    body = {"parent_id": args.parent_id} if args.parent_id else {"name": args.name}
+    return _print_response(_request(args, "PATCH", f"/api/v1/drive/directories/{args.id}", json=body))
+
+
+def cmd_share_file(args):
+    body = {}
+    if args.share_with:
+        body["share_with"] = args.share_with
+    if args.permission:
+        body["permission"] = args.permission
+    return _print_response(_request(args, "POST", f"/api/v1/drive/files/{args.id}/share", json=body))
+
+
+def cmd_share_directory(args):
+    body = {}
+    if args.share_with:
+        body["share_with"] = args.share_with
+    if args.permission:
+        body["permission"] = args.permission
+    return _print_response(_request(args, "POST", f"/api/v1/drive/directories/{args.id}/share", json=body))
+
+
+def cmd_list_shares(args):
+    return _print_response(_request(args, "GET", "/api/v1/drive/shares"))
+
+
+def cmd_list_shares_with_me(args):
+    return _print_response(_request(args, "GET", "/api/v1/drive/shares/with-me"))
+
+
+def cmd_delete_share(args):
+    return _print_response(_request(args, "DELETE", f"/api/v1/drive/shares/{args.id}"))
+
+
+def cmd_bulk_trash(args):
+    body = {
+        "file_ids": args.file_ids or [],
+        "dir_ids": args.dir_ids or [],
+        "current_dir_id": args.current_dir_id,
+    }
+    return _print_response(_request(args, "POST", "/api/v1/drive/bulk/trash", json=body))
+
+
+def cmd_bulk_restore(args):
+    body = {"file_ids": args.file_ids or []}
+    if args.dir_id:
+        body["dir_id"] = args.dir_id
+    return _print_response(_request(args, "POST", "/api/v1/drive/bulk/restore", json=body))
+
+
+def cmd_bulk_move(args):
+    body = {
+        "file_ids": args.file_ids or [],
+        "dir_ids": args.dir_ids or [],
+        "dir_id": args.dir_id,
+    }
+    return _print_response(_request(args, "POST", "/api/v1/drive/bulk/move", json=body))
+
+
+def cmd_bulk_copy(args):
+    body = {
+        "file_ids": args.file_ids or [],
+        "dir_ids": args.dir_ids or [],
+    }
+    if args.dir_id:
+        body["dir_id"] = args.dir_id
+    return _print_response(_request(args, "POST", "/api/v1/drive/bulk/copy", json=body))
+
+
+def cmd_create_zip(args):
+    body = {
+        "file_ids": args.file_ids or [],
+        "dir_ids": args.dir_ids or [],
+        "dir_id": args.dir_id,
+    }
+    return _print_response(_request(args, "POST", "/api/v1/drive/zip", json=body))
+
+
+# ---------------------------------------------------------------------------
+# Admin (site_admin only) handlers
+# ---------------------------------------------------------------------------
+
+def cmd_admin_list_roles(args):
+    return _print_response(_request(args, "GET", "/api/v1/admin/roles"))
+
+
+def cmd_admin_role_permissions(args):
+    return _print_response(_request(args, "GET", f"/api/v1/admin/roles/{args.role}/permissions"))
+
+
+def cmd_admin_grant_permission(args):
+    body = {"endpoint": args.endpoint}
+    return _print_response(_request(args, "POST", f"/api/v1/admin/roles/{args.role}/permissions", json=body))
+
+
+def cmd_admin_revoke_permission(args):
+    params = {"endpoint": args.endpoint}
+    return _print_response(_request(args, "DELETE", f"/api/v1/admin/roles/{args.role}/permissions", params=params))
+
+
+def cmd_admin_user_roles(args):
+    return _print_response(_request(args, "GET", f"/api/v1/admin/users/{args.email}/roles"))
+
+
+def cmd_admin_grant_role(args):
+    body = {"role": args.role}
+    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/roles", json=body))
+
+
+def cmd_admin_revoke_role(args):
+    return _print_response(_request(args, "DELETE", f"/api/v1/admin/users/{args.email}/roles/{args.role}"))
+
+
+def cmd_admin_reset_password(args):
+    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/reset-password"))
+
+
+def cmd_admin_revoke_tokens(args):
+    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/revoke-tokens"))
+
+
+def cmd_admin_force_relogin(args):
+    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/force-relogin"))
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="homelab-cli",
+        description="Command-line client for the Homelab API.",
+        epilog="Run 'homelab-cli <command> --help' for details on a specific command.",
+    )
+    parser.add_argument(
+        "--api-url",
+        metavar="URL",
+        help="Override the API base URL for this invocation only (never persisted; "
+             "use 'configure --set-api-url' to change it permanently).",
+    )
+
+    sub = parser.add_subparsers(dest="command", required=True, metavar="command")
+
+    def add(name, func, help_, description=None):
+        p = sub.add_parser(name, help=help_, description=description or help_)
+        p.set_defaults(func=func)
+        return p
+
+    # --- Session / configuration ---
+    p = add("login", cmd_login, "Log in and save a session for later commands.")
+    p.add_argument("--email", help="Account email. Prompted if omitted.")
+
+    add("logout", cmd_logout, "Log out and clear the saved local session.")
+
+    p = add("configure", cmd_configure, "View or permanently change the cached API base URL.")
+    p.add_argument("--set-api-url", metavar="URL", help="Permanently set the API base URL.")
+
+    # --- Auth / health ---
+    add("validate", cmd_validate, "Check whether the current JWT is valid.")
+    add("introspect", cmd_introspect, "Return the email bound to the current JWT (flat response).")
+    add("refresh", cmd_refresh, "Manually refresh the JWT using the saved refresh token.")
+    add("health", cmd_health, "Check API/database health (no auth required).")
+
+    # --- Drive: public share (no auth) ---
+    p = add("share-meta", cmd_share_meta, "Get metadata for a public file share link.")
+    p.add_argument("token", help="Share token from the share URL.")
+
+    p = add("share-dir", cmd_share_dir, "Get metadata + file list for a public directory share link.")
+    p.add_argument("token", help="Share token from the share URL.")
+
+    p = add("share-download", cmd_share_download, "Download a file via a public share link.")
+    p.add_argument("token", help="Share token from the share URL.")
+    p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
+
+    # --- Drive: authenticated ---
+    add("quota", cmd_quota, "Show usage/limit/file count for the current user.")
+
+    p = add("file-info", cmd_file_info, "List files by path or directory id.")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--path", help="List files under this path (root-relative).")
+    g.add_argument("--dir-id", help="List files in this directory id.")
+    p.add_argument("--startat", type=int, help="Pagination offset (1000 results/page).")
+    p.add_argument("--recursive", action="store_true", help="Recurse into subdirectories.")
+
+    p = add("upload-file", cmd_upload_file, "Upload a local file to Drive.")
+    p.add_argument("file", help="Local file path to upload.")
+    p.add_argument("--dir-id", help="Destination directory id. Default: root.")
+
+    p = add("file-meta", cmd_file_meta, "Show lightweight metadata for a file (no disk I/O).")
+    p.add_argument("id", help="File id.")
+    p.add_argument("--version", help="Specific version id. Default: current version.")
+
+    p = add("download-file", cmd_download_file, "Download a file's content.")
+    p.add_argument("id", help="File id.")
+    p.add_argument("--version", help="Specific version id. Default: current version.")
+    p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
+
+    p = add("trash-file", cmd_trash_file, "Move a file to Trash (soft delete).")
+    p.add_argument("id", help="File id.")
+
+    p = add("move-file", cmd_move_file, "Move (or rename via path) a file.")
+    p.add_argument("id", help="File id.")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--to-path", help="Destination path.")
+    g.add_argument("--dir-id", help="Destination directory id.")
+
+    p = add("copy-file", cmd_copy_file, "Queue an async copy of a file.")
+    p.add_argument("id", help="File id.")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--to-path", help="Destination path.")
+    g.add_argument("--dir-id", help="Destination directory id.")
+    p.add_argument("--name", help="Optional new name for the copy.")
+
+    p = add("file-versions", cmd_file_versions, "List all versions of a file.")
+    p.add_argument("id", help="File id.")
+
+    add("list-trash", cmd_list_trash, "List trashed files with their original path.")
+
+    p = add("restore-file", cmd_restore_file, "Restore one file from Trash.")
+    p.add_argument("id", help="File id.")
+
+    add("empty-trash", cmd_empty_trash, "Permanently empty Trash (frees quota, deletes on-disk data).")
+
+    add("trash-dir", cmd_trash_dir, "Get (or create) the user's Trash directory id.")
+
+    p = add("list-directories", cmd_list_directories, "List directories.")
+    p.add_argument("--parent-id", help="List only direct children of this directory. Default: all directories, flat.")
+
+    p = add("create-directory", cmd_create_directory, "Create a directory.")
+    p.add_argument("--name", required=True, help="Directory name.")
+    p.add_argument("--parent-id", help="Parent directory id. Default: root.")
+
+    p = add("delete-directory", cmd_delete_directory, "Recursively trash and delete a directory tree.")
+    p.add_argument("id", help="Directory id.")
+
+    p = add("update-directory", cmd_update_directory, "Move or rename a directory.")
+    p.add_argument("id", help="Directory id.")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--parent-id", help="Move under this parent directory id.")
+    g.add_argument("--name", help="Rename to this name.")
+
+    p = add("share-file", cmd_share_file, "Create a share for a file.")
+    p.add_argument("id", help="File id.")
+    p.add_argument("--share-with", help="Email to share with. Omit for a public link.")
+    p.add_argument("--permission", choices=["read", "write"], help="Default: read.")
+
+    p = add("share-directory", cmd_share_directory, "Create a share for a directory.")
+    p.add_argument("id", help="Directory id.")
+    p.add_argument("--share-with", help="Email to share with. Omit for a public link.")
+    p.add_argument("--permission", choices=["read", "write"], help="Default: read.")
+
+    add("list-shares", cmd_list_shares, "List shares you created.")
+    add("list-shares-with-me", cmd_list_shares_with_me, "List shares others created targeting you.")
+
+    p = add("delete-share", cmd_delete_share, "Revoke a share you own.")
+    p.add_argument("id", help="Share id.")
+
+    p = add("bulk-trash", cmd_bulk_trash, "Trash multiple files/directories at once.")
+    p.add_argument("--file-ids", nargs="+", help="File ids to trash.")
+    p.add_argument("--dir-ids", nargs="+", help="Directory ids to trash.")
+    p.add_argument("--current-dir-id", help="Directory the file-ids are expected to be in (stale-selection guard).")
+
+    p = add("bulk-restore", cmd_bulk_restore, "Restore multiple files from Trash at once.")
+    p.add_argument("--file-ids", nargs="+", help="File ids to restore.")
+    p.add_argument("--dir-id", help="Destination directory id. Default: root.")
+
+    p = add("bulk-move", cmd_bulk_move, "Move multiple files/directories at once.")
+    p.add_argument("--file-ids", nargs="+", help="File ids to move.")
+    p.add_argument("--dir-ids", nargs="+", help="Directory ids to move.")
+    p.add_argument("--dir-id", help="Destination directory id. Default: root.")
+
+    p = add("bulk-copy", cmd_bulk_copy, "Copy multiple files/directories at once.")
+    p.add_argument("--file-ids", nargs="+", help="File ids to copy.")
+    p.add_argument("--dir-ids", nargs="+", help="Directory ids to copy.")
+    p.add_argument("--dir-id", help="Destination directory id. Default: root.")
+
+    p = add("create-zip", cmd_create_zip, "Queue an async zip of files/directories.")
+    p.add_argument("--file-ids", nargs="+", help="File ids to include.")
+    p.add_argument("--dir-ids", nargs="+", help="Directory ids to include.")
+    p.add_argument("--dir-id", required=True, help="Destination directory id for the resulting zip.")
+
+    # --- Admin (site_admin only) ---
+    add("admin-list-roles", cmd_admin_list_roles, "[admin] List all roles.")
+
+    p = add("admin-role-permissions", cmd_admin_role_permissions, "[admin] List endpoints granted to a role.")
+    p.add_argument("role", help="Role name (e.g. user, site_admin).")
+
+    p = add("admin-grant-permission", cmd_admin_grant_permission, "[admin] Grant an endpoint to a role.")
+    p.add_argument("role", help="Role name.")
+    p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
+
+    p = add("admin-revoke-permission", cmd_admin_revoke_permission, "[admin] Revoke an endpoint from a role.")
+    p.add_argument("role", help="Role name.")
+    p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
+
+    p = add("admin-user-roles", cmd_admin_user_roles, "[admin] List a user's roles.")
+    p.add_argument("email", help="Target account email.")
+
+    p = add("admin-grant-role", cmd_admin_grant_role, "[admin] Assign a role to a user.")
+    p.add_argument("email", help="Target account email.")
+    p.add_argument("--role", required=True, help="Role name to assign.")
+
+    p = add("admin-revoke-role", cmd_admin_revoke_role, "[admin] Revoke a role from a user.")
+    p.add_argument("email", help="Target account email.")
+    p.add_argument("role", help="Role name to revoke.")
+
+    p = add(
+        "admin-reset-password", cmd_admin_reset_password,
+        "[admin] Reset a user's password to a random passphrase (returned once).",
+        description="Resets the target user's password to a randomly generated dictionary "
+                     "passphrase. Never accepts a client-supplied password. The new plaintext "
+                     "passphrase is printed once in the response and is not recoverable afterward.",
+    )
+    p.add_argument("email", help="Target account email.")
+
+    p = add("admin-revoke-tokens", cmd_admin_revoke_tokens, "[admin] Revoke all of a user's refresh tokens.")
+    p.add_argument("email", help="Target account email.")
+
+    p = add("admin-force-relogin", cmd_admin_force_relogin,
+            "[admin] Force a user to re-login (identical action to admin-revoke-tokens).")
+    p.add_argument("email", help="Target account email.")
+
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        sys.exit(args.func(args) or 0)
+    except requests.RequestException as exc:
+        print(f"error: request failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)
+        sys.exit(130)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
