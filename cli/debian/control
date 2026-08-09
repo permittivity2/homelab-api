@@ -1,0 +1,16 @@
+Source: homelab-cli
+Section: utils
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-cli
+Architecture: all
+Depends: ${misc:Depends}, python3 (>= 3.10), python3-requests
+Description: Command-line client for the Homelab API
+ A site-admin scripting tool for the Homelab Drive REST API: login/session
+ management with automatic JWT refresh, and one subcommand per API call
+ covering Drive file/directory operations, sharing, bulk operations, and
+ site_admin role/user administration.

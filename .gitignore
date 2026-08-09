@@ -37,6 +37,13 @@ sso-ui/blib/
 sso-ui/Makefile
 sso-ui/MYMETA.*
 sso-ui/pm_to_blib
+cli/debian/homelab-cli/
+cli/debian/.debhelper/
+cli/debian/debhelper-build-stamp
+cli/debian/files
+cli/debian/*.substvars
+cli/debian/*.debhelper.log
+cli/debian/*.debhelper
 *.deb
 *.buildinfo
 *.changes
