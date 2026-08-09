@@ -126,6 +126,12 @@ JWT and refresh token from the last successful
 Mode 0600. This file contains a live bearer credential \- treat it like
 an SSH private key. Deleted by
 .BR logout .
+.TP
+.I /usr/share/bash-completion/completions/homelab-cli
+Bash tab-completion for subcommand names and their common flags.
+Installed automatically; no user action needed as long as the
+.B bash-completion
+package is installed and enabled in your shell.
 .SH ENVIRONMENT
 None. All configuration is via the files above or the
 .B --api-url
