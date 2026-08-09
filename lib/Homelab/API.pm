@@ -5,6 +5,9 @@ use Homelab::Database;
 use Homelab::Auth;
 use Homelab::RateLimit;
 use Homelab::Drive;
+use Homelab::Roles;
+use Homelab::Utils::Password qw(hash_password);
+use Homelab::Utils::Passphrase qw(generate_passphrase);
 use YAML::XS qw(LoadFile);
 use Carp qw(croak);
 
@@ -13,6 +16,7 @@ my $db = Homelab::Database->new($config);
 my $auth = Homelab::Auth->new($db, $config);
 my $limiter = Homelab::RateLimit->new($db);
 my $drive = Homelab::Drive->new($db, $config);
+my $roles = Homelab::Roles->new($db, $config);
 
 sub _set_json_response {
     my ($c, $data, $status) = @_;
@@ -32,6 +36,44 @@ sub _auth_user {
     return undef unless $token;
     my $result = $auth->validate($token);
     return $result->{error} ? undef : $result->{user}{email};
+}
+
+# Authenticate + authorize a request against the caller's role permissions.
+# Returns the caller's email on success, or undef after having already sent
+# a 401/403 response (mirrors _auth_user's "check the return value" idiom).
+sub _auth_and_authorize {
+    my $c = shift;
+    my $email = _auth_user($c);
+    unless ($email) {
+        _set_json_response($c, { success => 0, error => 'Unauthorized' }, 401);
+        return undef;
+    }
+    my $method  = uc($c->req->method);
+    my $pattern = $c->match->endpoint->pattern->unparsed;
+    unless ($roles->user_has_permission($email, $method, $pattern)) {
+        _set_json_response($c, { success => 0, error => 'Forbidden' }, 403);
+        return undef;
+    }
+    return $email;
+}
+
+# Recursively walk the app's route tree and return the set of registered
+# "METHOD /pattern" strings, used to validate endpoint keys an admin tries
+# to grant to a role (rejects typos/dead permissions that could never match).
+sub _known_endpoints {
+    my @out;
+    my $walk = sub {
+        my ($routes, $recurse) = @_;
+        for my $route (@{ $routes->children }) {
+            my $pattern = $route->pattern->unparsed;
+            if ($pattern && @{ $route->via // [] }) {
+                push @out, uc($_) . ' ' . $pattern for @{ $route->via };
+            }
+            $recurse->($route, $recurse);
+        }
+    };
+    $walk->(app->routes, $walk);
+    return \@out;
 }
 
 hook before_dispatch => sub {
@@ -95,57 +137,6 @@ post '/api/v1/auth/login' => sub ($c) {
     );
 };
 
-post '/api/v1/auth/logout' => sub ($c) {
-    my $refresh_token = $c->cookie('homelab-token');
-
-    unless ($refresh_token) {
-        return _set_json_response(
-            $c,
-            { success => 0, error => 'Refresh token required' },
-            401
-        );
-    }
-
-    my $result = $auth->logout($refresh_token);
-
-    if ($result->{error}) {
-        return _set_json_response($c, { success => 0, error => $result->{error} }, 500);
-    }
-
-    $c->cookie('homelab-token', '', { path => '/', expires => 1 });
-
-    return _set_json_response($c, { success => 1 }, 200);
-};
-
-get '/api/v1/auth/validate' => sub ($c) {
-    my $auth_header = $c->req->headers->authorization;
-    my $token;
-
-    if ($auth_header && $auth_header =~ /^Bearer\s+(.+)$/) {
-        $token = $1;
-    }
-
-    unless ($token) {
-        return _set_json_response(
-            $c,
-            { success => 0, error => 'Token required' },
-            401
-        );
-    }
-
-    my $result = $auth->validate($token);
-
-    if ($result->{error}) {
-        return _set_json_response($c, { success => 0, error => $result->{error} }, 401);
-    }
-
-    return _set_json_response(
-        $c,
-        { success => 1, valid => 1, user => $result->{user} },
-        200
-    );
-};
-
 # Flat-JSON token introspection for external services that can't parse the
 # nested /validate response — Dovecot's oauth2 passdb (introspection_mode =
 # auth) and Roundcube's oauth_identity_uri both expect a plain top-level
@@ -168,6 +159,49 @@ get '/api/v1/auth/introspect' => sub ($c) {
     return _set_json_response($c, { email => $result->{user}{email} }, 200);
 };
 
+post '/api/v1/auth/logout' => sub ($c) {
+    my $refresh_token = $c->cookie('homelab-token');
+
+    unless ($refresh_token) {
+        return _set_json_response(
+            $c,
+            { success => 0, error => 'Refresh token required' },
+            401
+        );
+    }
+
+    # logout/refresh authenticate via the refresh-token cookie itself, not a
+    # Bearer JWT (the JWT may already be expired — that's often *why* the
+    # client is calling these) — resolve the acting user from the token to
+    # run the same permission check the JWT-based routes get.
+    my $email = $roles->email_for_refresh_token($refresh_token);
+    return _set_json_response($c, { success => 0, error => 'Invalid or expired refresh token' }, 401)
+        unless $email;
+    return _set_json_response($c, { success => 0, error => 'Forbidden' }, 403)
+        unless $roles->user_has_permission($email, 'POST', '/api/v1/auth/logout');
+
+    my $result = $auth->logout($refresh_token);
+
+    if ($result->{error}) {
+        return _set_json_response($c, { success => 0, error => $result->{error} }, 500);
+    }
+
+    $c->cookie('homelab-token', '', { path => '/', expires => 1 });
+
+    return _set_json_response($c, { success => 1 }, 200);
+};
+
+get '/api/v1/auth/validate' => sub ($c) {
+    my $email = _auth_and_authorize($c);
+    return unless $email;
+
+    return _set_json_response(
+        $c,
+        { success => 1, valid => 1, user => { email => $email } },
+        200
+    );
+};
+
 post '/api/v1/auth/refresh' => sub ($c) {
     my $refresh_token = $c->cookie('homelab-token');
 
@@ -178,6 +212,12 @@ post '/api/v1/auth/refresh' => sub ($c) {
             401
         );
     }
+
+    my $email = $roles->email_for_refresh_token($refresh_token);
+    return _set_json_response($c, { success => 0, error => 'Invalid or expired refresh token' }, 401)
+        unless $email;
+    return _set_json_response($c, { success => 0, error => 'Forbidden' }, 403)
+        unless $roles->user_has_permission($email, 'POST', '/api/v1/auth/refresh');
 
     my $result = $auth->refresh($refresh_token);
 
@@ -257,13 +297,10 @@ get '/api/v1/health' => sub ($c) {
     );
 };
 
-# Protected Drive routes (requires auth)
+# Protected Drive routes (requires auth + permission)
 my $d = under '/api/v1/drive' => sub ($c) {
-    my $email = _auth_user($c);
-    unless ($email) {
-        _set_json_response($c, { success => 0, error => 'Unauthorized' }, 401);
-        return 0;
-    }
+    my $email = _auth_and_authorize($c);
+    return 0 unless $email;
     $c->stash(user_email => $email);
     return 1;
 };
@@ -581,6 +618,118 @@ $d->post('/zip' => sub ($c) {
     my $dest_dir  = $json->{dir_id};   # undef = root; caller passes _currentDir()
     my $result    = $drive->queue_zip($email, $file_ids, $dir_ids, $dest_dir);
     return _set_json_response($c, $result, $result->{error} ? 400 : 202);
+});
+
+# Admin routes — hardcoded to require the site_admin role, independent of
+# the dynamic api.role_permissions table (so a bad table edit can never
+# lock every admin out with no recovery path).
+my $a = under '/api/v1/admin' => sub ($c) {
+    my $email = _auth_user($c);
+    unless ($email) {
+        _set_json_response($c, { success => 0, error => 'Unauthorized' }, 401);
+        return 0;
+    }
+    unless ($roles->is_site_admin($email)) {
+        _set_json_response($c, { success => 0, error => 'Forbidden' }, 403);
+        return 0;
+    }
+    $c->stash(user_email => $email);
+    return 1;
+};
+
+$a->get('/roles' => sub ($c) {
+    my $result = $roles->list_roles;
+    return _set_json_response($c, { success => 1, roles => $result }, 200);
+});
+
+$a->get('/roles/:role/permissions' => sub ($c) {
+    my $result = $roles->list_role_permissions($c->stash('role'));
+    return _set_json_response($c, $result, $result->{error} ? 404 : 200);
+});
+
+$a->post('/roles/:role/permissions' => sub ($c) {
+    my $role     = $c->stash('role');
+    my $json     = $c->req->json // {};
+    my $endpoint = $json->{endpoint};
+    return _set_json_response($c, { success => 0, error => 'endpoint required' }, 400)
+        unless $endpoint;
+
+    my $known = _known_endpoints();
+    return _set_json_response($c, { success => 0, error => 'Unknown endpoint (no matching registered route)' }, 400)
+        unless grep { $_ eq $endpoint } @$known;
+
+    my $result = $roles->grant_endpoint($role, $endpoint, $c->stash('user_email'));
+    return _set_json_response($c, $result, $result->{error} ? 400 : 201);
+});
+
+$a->delete('/roles/:role/permissions' => sub ($c) {
+    my $role     = $c->stash('role');
+    my $endpoint = $c->param('endpoint') // ($c->req->json // {})->{endpoint};
+    return _set_json_response($c, { success => 0, error => 'endpoint required' }, 400)
+        unless $endpoint;
+
+    my $result = $roles->revoke_endpoint($role, $endpoint);
+    return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
+$a->get('/users/#email/roles' => sub ($c) {
+    my $target = $c->stash('email');
+    return _set_json_response($c, { success => 1, email => $target, roles => $roles->user_roles($target) }, 200);
+});
+
+$a->post('/users/#email/roles' => sub ($c) {
+    my $target = $c->stash('email');
+    my $json   = $c->req->json // {};
+    my $role   = $json->{role};
+    return _set_json_response($c, { success => 0, error => 'role required' }, 400)
+        unless $role;
+
+    my $result = $roles->assign_role($target, $role, $c->stash('user_email'));
+    return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
+$a->delete('/users/#email/roles/:role' => sub ($c) {
+    my $target = $c->stash('email');
+    my $role   = $c->stash('role');
+
+    my $result = $roles->revoke_role($target, $role);
+    return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
+# Generates a random server-side passphrase and overwrites the target
+# user's password with it — never accepts a client-supplied password. Any
+# client-supplied "new_password"-shaped key in the body is ignored outright
+# (not even inspected further), so there's no observable signal that
+# supplying one might work.
+$a->post('/users/#email/reset-password' => sub ($c) {
+    my $target  = $c->stash('email');
+    my $user_id = $roles->user_id($target);
+    return _set_json_response($c, { success => 0, error => 'User not found' }, 404)
+        unless $user_id;
+
+    my $plaintext = generate_passphrase(
+        wordlist_path => $config->{passphrase}{wordlist_path},
+    );
+    my $hash = hash_password($plaintext);
+
+    $db->query('UPDATE dovecot.users SET password = ? WHERE id = ?', $hash, $user_id);
+
+    return _set_json_response($c, { success => 1, user => { email => $target }, password => $plaintext }, 200);
+});
+
+$a->post('/users/#email/revoke-tokens' => sub ($c) {
+    my $target = $c->stash('email');
+    my $result = $roles->revoke_all_tokens($target);
+    return _set_json_response($c, $result, $result->{error} ? 404 : 200);
+});
+
+# Same action as /revoke-tokens under a name that reads better for the
+# "kick them out and make them log back in" mental model — both call the
+# exact same underlying Roles::revoke_all_tokens.
+$a->post('/users/#email/force-relogin' => sub ($c) {
+    my $target = $c->stash('email');
+    my $result = $roles->revoke_all_tokens($target);
+    return _set_json_response($c, $result, $result->{error} ? 404 : 200);
 });
 
 # Allow uploads up to 10GB; buffer incoming request body on NFS (not tiny local /tmp)

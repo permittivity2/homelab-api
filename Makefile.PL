@@ -14,6 +14,7 @@ WriteMakefile(
         'Mojo::Pg'          => '4.0',
         'Crypt::JWT'        => '0.0',
         'Crypt::Argon2'     => '0.0',
+        'Crypt::URandom'    => '0.0',
         'JSON::XS'          => '4.0',
         'DateTime'          => '1.0',
     },

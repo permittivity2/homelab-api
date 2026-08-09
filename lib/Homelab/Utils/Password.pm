@@ -5,12 +5,16 @@ use warnings;
 use Exporter qw(import);
 use Crypt::Argon2 qw(argon2id_pass argon2id_verify);
 
-our @EXPORT_OK = qw(verify_dovecot_password);
+our @EXPORT_OK = qw(verify_dovecot_password hash_password verify_password);
 
 sub verify_dovecot_password {
     my ($plaintext, $hash) = @_;
 
     return 0 unless $plaintext && $hash;
+
+    if ($hash =~ /^\$argon2id\$/) {
+        return argon2id_verify($hash, $plaintext) ? 1 : 0;
+    }
 
     if ($hash =~ /^\$6\$/) {
         return _verify_sha512_crypt($plaintext, $hash);

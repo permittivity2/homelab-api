@@ -14,10 +14,12 @@ Depends: perl (>= 5.40),
          libmojo-pg-perl,
          libcrypt-jwt-perl,
          libcrypt-argon2-perl,
+         libcrypt-urandom-perl,
          libjson-xs-perl,
          libdatetime-perl,
          libyaml-libyaml-perl,
          postgresql-client,
+         wamerican,
          adduser
 Recommends: postgresql
 Description: Unified REST API backend for Homelab ecosystem
