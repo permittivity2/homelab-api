@@ -38,6 +38,19 @@ sub _auth_user {
     return $result->{error} ? undef : $result->{user}{email};
 }
 
+# A leaf route's own pattern->unparsed is only its fragment RELATIVE to
+# whatever bridge(s) it's registered under (e.g. '/quota', not
+# '/api/v1/drive/quota') — walk up the ->parent chain and concatenate every
+# ancestor's own pattern to get the full path Mojolicious actually matched.
+sub _full_pattern {
+    my ($route) = @_;
+    my @parts;
+    for (my $r = $route; $r; $r = $r->parent) {
+        unshift @parts, $r->pattern->unparsed;
+    }
+    return join('', @parts);
+}
+
 # Authenticate + authorize a request against the caller's role permissions.
 # Returns the caller's email on success, or undef after having already sent
 # a 401/403 response (mirrors _auth_user's "check the return value" idiom).
@@ -49,7 +62,7 @@ sub _auth_and_authorize {
         return undef;
     }
     my $method  = uc($c->req->method);
-    my $pattern = $c->match->endpoint->pattern->unparsed;
+    my $pattern = _full_pattern($c->match->endpoint);
     unless ($roles->user_has_permission($email, $method, $pattern)) {
         _set_json_response($c, { success => 0, error => 'Forbidden' }, 403);
         return undef;
@@ -65,8 +78,8 @@ sub _known_endpoints {
     my $walk = sub {
         my ($routes, $recurse) = @_;
         for my $route (@{ $routes->children }) {
-            my $pattern = $route->pattern->unparsed;
-            if ($pattern && @{ $route->via // [] }) {
+            if (@{ $route->via // [] }) {
+                my $pattern = _full_pattern($route);
                 push @out, uc($_) . ' ' . $pattern for @{ $route->via };
             }
             $recurse->($route, $recurse);
