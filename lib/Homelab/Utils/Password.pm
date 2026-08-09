@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Exporter qw(import);
 use Crypt::Argon2 qw(argon2id_pass argon2id_verify);
+use Crypt::URandom qw(urandom);
 
 our @EXPORT_OK = qw(verify_dovecot_password hash_password verify_password);
 
@@ -32,7 +33,8 @@ sub _verify_sha512_crypt {
 
 sub hash_password {
     my ($plaintext) = @_;
-    return argon2id_pass($plaintext);
+    my $salt = urandom(16);
+    return argon2id_pass($plaintext, $salt, 3, '64M', 1, 32);
 }
 
 sub verify_password {
