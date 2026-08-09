@@ -48,6 +48,15 @@ GRANT USAGE, SELECT ON SEQUENCE api.roles_id_seq             TO homelab_api;
 GRANT USAGE, SELECT ON SEQUENCE api.user_roles_id_seq        TO homelab_api;
 GRANT USAGE, SELECT ON SEQUENCE api.role_permissions_id_seq  TO homelab_api;
 
+-- homelab_api previously only had SELECT on dovecot.users (issue #003 —
+-- read-only, needed for login). The admin password-reset endpoint is the
+-- first legitimate reason this app writes to dovecot.users at all, so
+-- widen the grant just enough for that — column-scoped, not full-row
+-- UPDATE, since nothing else in this app should ever touch this table's
+-- other columns (username/domain/quota/etc. are owned by the mail
+-- server's own provisioning, not homelab-api).
+GRANT UPDATE (password) ON dovecot.users TO homelab_api;
+
 INSERT INTO api.roles (name, description) VALUES
     ('user', 'Default role — standard API access'),
     ('site_admin', 'Administrative capabilities (informational only; admin routes are hardcoded, not gated by this table)')
