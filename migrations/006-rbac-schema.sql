@@ -92,3 +92,16 @@ FROM (VALUES
     ('POST /api/v1/drive/zip')
 ) AS t(k)
 ON CONFLICT (role_id, endpoint_key) DO NOTHING;
+
+-- Seed: assign the `user` role to every existing active account. Without
+-- this, every pre-existing account holds zero roles after this migration
+-- (api.user_roles starts empty), so every Drive/auth call from every
+-- existing user would 403 the moment this ships — the exact regression
+-- this migration is supposed to avoid. New accounts created after this
+-- migration runs still need `user` assigned explicitly (or via whatever
+-- account-creation path is extended to do so).
+INSERT INTO api.user_roles (user_id, role_id)
+SELECT u.id, (SELECT id FROM api.roles WHERE name = 'user')
+FROM dovecot.users u
+WHERE u.active = 'Y'
+ON CONFLICT (user_id, role_id) DO NOTHING;
