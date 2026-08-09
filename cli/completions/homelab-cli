@@ -1,0 +1,61 @@
+# bash completion for homelab-cli
+#
+# Subcommand names and per-command flags below are hand-kept in sync with
+# script/homelab-cli's argparse definitions (there is no code-generation
+# step) — if a subcommand or flag is added there, mirror it here too.
+
+_homelab_cli_completions() {
+    local cur prev commands subcommand opts i
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+
+    commands="login logout configure validate introspect refresh health \
+share-meta share-dir share-download quota file-info upload-file file-meta \
+download-file trash-file move-file copy-file file-versions list-trash \
+restore-file empty-trash trash-dir list-directories create-directory \
+delete-directory update-directory share-file share-directory list-shares \
+list-shares-with-me delete-share bulk-trash bulk-restore bulk-move \
+bulk-copy create-zip admin-list-roles admin-role-permissions \
+admin-grant-permission admin-revoke-permission admin-user-roles \
+admin-grant-role admin-revoke-role admin-reset-password \
+admin-revoke-tokens admin-force-relogin"
+
+    subcommand=""
+    for (( i=1; i < COMP_CWORD; i++ )); do
+        case "${COMP_WORDS[i]}" in
+            -*) ;;
+            *) subcommand="${COMP_WORDS[i]}"; break ;;
+        esac
+    done
+
+    if [[ -z "$subcommand" ]]; then
+        COMPREPLY=( $(compgen -W "-h --help --api-url $commands" -- "$cur") )
+        return 0
+    fi
+
+    case "$subcommand" in
+        login) opts="--email" ;;
+        configure) opts="--set-api-url" ;;
+        share-download|download-file) opts="--output --version" ;;
+        file-info) opts="--path --dir-id --startat --recursive" ;;
+        upload-file) opts="--dir-id" ;;
+        file-meta) opts="--version" ;;
+        move-file|copy-file) opts="--to-path --dir-id --name" ;;
+        list-directories) opts="--parent-id" ;;
+        create-directory) opts="--name --parent-id" ;;
+        update-directory) opts="--parent-id --name" ;;
+        share-file|share-directory) opts="--share-with --permission" ;;
+        bulk-trash) opts="--file-ids --dir-ids --current-dir-id" ;;
+        bulk-restore) opts="--file-ids --dir-id" ;;
+        bulk-move|bulk-copy) opts="--file-ids --dir-ids --dir-id" ;;
+        create-zip) opts="--file-ids --dir-ids --dir-id" ;;
+        admin-grant-permission|admin-revoke-permission) opts="--endpoint" ;;
+        admin-grant-role) opts="--role" ;;
+        *) opts="" ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "-h --help $opts" -- "$cur") )
+    return 0
+}
+
+complete -F _homelab_cli_completions homelab-cli
