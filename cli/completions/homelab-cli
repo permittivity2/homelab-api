@@ -4,10 +4,39 @@
 # script/homelab-cli's argparse definitions (there is no code-generation
 # step) — if a subcommand or flag is added there, mirror it here too.
 
+# Value-taking flags across all subcommands. Used both to decide what (if
+# anything) to complete for a flag's value, and to correctly skip over
+# flag values when counting how many positional arguments have already
+# been given (e.g. "upload-file --dir-id 59 <TAB>" must not mistake "59"
+# for the upload-file's own positional file argument).
+_homelab_cli_value_flags="--email --set-api-url --path --dir-id --startat \
+--parent-id --version --output --to-path --name --share-with --permission \
+--current-dir-id --endpoint --role --file-ids --dir-ids"
+
+_homelab_cli_is_value_flag() {
+    local flag="$1" f
+    for f in $_homelab_cli_value_flags; do
+        [[ "$flag" == "$f" ]] && return 0
+    done
+    return 1
+}
+
+# Local filesystem path completion — delegates to the bash-completion
+# package's own _filedir helper (handles ~ expansion, trailing slashes on
+# directories, etc.) when available, else a plain compgen -f fallback.
+_homelab_cli_filecomplete() {
+    if declare -F _filedir >/dev/null 2>&1; then
+        _filedir
+    else
+        COMPREPLY=( $(compgen -f -- "$cur") )
+    fi
+}
+
 _homelab_cli_completions() {
-    local cur prev commands subcommand opts i
+    local cur prev commands subcommand opts i word skip positional_count
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     commands="login logout configure validate introspect refresh health \
 share-meta share-dir share-download quota file-info upload-file file-meta \
@@ -20,16 +49,47 @@ admin-grant-permission admin-revoke-permission admin-user-roles \
 admin-grant-role admin-revoke-role admin-reset-password \
 admin-revoke-tokens admin-force-relogin"
 
+    # Completing the VALUE of a flag: only --output is a local path.
+    # Every other value-taking flag is a remote id/string with nothing
+    # sensible to complete locally, so return with no suggestions.
+    if _homelab_cli_is_value_flag "$prev"; then
+        if [[ "$prev" == "--output" ]]; then
+            _homelab_cli_filecomplete
+        fi
+        return 0
+    fi
+
+    # Determine the subcommand and how many positional args are already
+    # present, skipping over each value-taking flag's value as we go.
     subcommand=""
+    positional_count=0
+    skip=0
     for (( i=1; i < COMP_CWORD; i++ )); do
-        case "${COMP_WORDS[i]}" in
-            -*) ;;
-            *) subcommand="${COMP_WORDS[i]}"; break ;;
-        esac
+        word="${COMP_WORDS[i]}"
+        if [[ $skip -eq 1 ]]; then
+            skip=0
+            continue
+        fi
+        if _homelab_cli_is_value_flag "$word"; then
+            skip=1
+            continue
+        fi
+        [[ "$word" == -* ]] && continue
+        if [[ -z "$subcommand" ]]; then
+            subcommand="$word"
+        else
+            positional_count=$((positional_count + 1))
+        fi
     done
 
     if [[ -z "$subcommand" ]]; then
         COMPREPLY=( $(compgen -W "-h --help --api-url $commands" -- "$cur") )
+        return 0
+    fi
+
+    # upload-file's positional `file` argument is a local path.
+    if [[ "$subcommand" == "upload-file" && $positional_count -eq 0 ]]; then
+        _homelab_cli_filecomplete
         return 0
     fi
 
