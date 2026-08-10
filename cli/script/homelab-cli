@@ -176,9 +176,13 @@ def _print_progress(done, total):
         return
     if total:
         pct = min(100, done * 100 // total)
-        sys.stderr.write(f"\r{_human_size(done)} / {_human_size(total)} ({pct}%)")
+        text = f"{_human_size(done)} / {_human_size(total)} ({pct}%)"
     else:
-        sys.stderr.write(f"\r{_human_size(done)} transferred")
+        text = f"{_human_size(done)} transferred"
+    # \x1b[K erases from the cursor to end of line — without it, a shorter
+    # line leaves trailing characters from a longer previous one visible
+    # (e.g. a stray digit left over from "10%" once it shrinks to "9%").
+    sys.stderr.write(f"\r{text}\x1b[K")
     sys.stderr.flush()
 
 
