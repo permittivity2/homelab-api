@@ -87,8 +87,13 @@ admin-revoke-tokens admin-force-relogin"
         return 0
     fi
 
-    # upload-file's positional `file` argument is a local path.
-    if [[ "$subcommand" == "upload-file" && $positional_count -eq 0 ]]; then
+    # upload-file's positional `file` argument is a local path — but only
+    # offer path completion when the user is actually typing a bare word,
+    # not when they're mid-flag-name (e.g. "upload-file --dir<TAB>" must
+    # still complete to --dir-id; argparse accepts the flag and the
+    # positional in either order, so both must be completable regardless
+    # of which one hasn't been given yet).
+    if [[ "$subcommand" == "upload-file" && $positional_count -eq 0 && "$cur" != -* ]]; then
         _homelab_cli_filecomplete
         return 0
     fi
