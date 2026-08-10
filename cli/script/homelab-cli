@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import requests
+from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
 CONFIG_DIR = Path.home() / ".config" / "homelab-cli"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -162,6 +163,31 @@ def _die_with_error(resp):
     sys.exit(1)
 
 
+def _human_size(n):
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{int(n)} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def _print_progress(done, total):
+    if not sys.stderr.isatty():
+        return
+    if total:
+        pct = min(100, done * 100 // total)
+        sys.stderr.write(f"\r{_human_size(done)} / {_human_size(total)} ({pct}%)")
+    else:
+        sys.stderr.write(f"\r{_human_size(done)} transferred")
+    sys.stderr.flush()
+
+
+def _finish_progress():
+    if sys.stderr.isatty():
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+
+
 def _save_binary_response(resp, output_path, default_name):
     if not (200 <= resp.status_code < 300):
         _die_with_error(resp)
@@ -172,13 +198,16 @@ def _save_binary_response(resp, output_path, default_name):
         if "filename=" in disposition:
             output_path = disposition.split("filename=", 1)[1].strip('"; ')
 
-    total = 0
+    total_size = int(resp.headers.get("Content-Length", 0) or 0)
+    downloaded = 0
     with open(output_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=65536):
             f.write(chunk)
-            total += len(chunk)
+            downloaded += len(chunk)
+            _print_progress(downloaded, total_size)
+    _finish_progress()
 
-    print(f"Saved to {output_path} ({total} bytes)")
+    print(f"Saved to {output_path} ({downloaded} bytes)")
     return 0
 
 
@@ -292,7 +321,7 @@ def cmd_share_dir(args):
 
 def cmd_share_download(args):
     api_url = resolve_api_url(args)
-    resp = requests.get(f"{api_url}/api/v1/drive/s/{args.token}", timeout=60, stream=True)
+    resp = requests.get(f"{api_url}/api/v1/drive/s/{args.token}", timeout=None, stream=True)
     return _save_binary_response(resp, args.output, f"share-{args.token}.bin")
 
 
@@ -318,12 +347,40 @@ def cmd_file_info(args):
 
 
 def cmd_upload_file(args):
-    with open(args.file, "rb") as fh:
-        files = {"file": (os.path.basename(args.file), fh)}
-        data = {}
-        if args.dir_id:
-            data["dir_id"] = args.dir_id
-        return _print_response(_request(args, "POST", "/api/v1/drive/files", files=files, data=data))
+    session = get_session_or_die()
+    api_url = resolve_api_url(args)
+    url = f"{api_url}/api/v1/drive/files"
+
+    def _attempt(bearer_token):
+        with open(args.file, "rb") as fh:
+            fields = {}
+            if args.dir_id:
+                fields["dir_id"] = args.dir_id
+            fields["file"] = (os.path.basename(args.file), fh, "application/octet-stream")
+            encoder = MultipartEncoder(fields=fields)
+            monitor = MultipartEncoderMonitor(
+                encoder, lambda m: _print_progress(m.bytes_read, m.len)
+            )
+            headers = {
+                "Authorization": f"Bearer {bearer_token}",
+                "Content-Type": monitor.content_type,
+            }
+            return requests.post(url, data=monitor, headers=headers, timeout=None)
+
+    # Not routed through the shared _request() wrapper: its 401-retry logic
+    # resends the same **kwargs, but a MultipartEncoderMonitor is a
+    # consumed-once stream — replaying a partially-read one on retry would
+    # send a truncated body. Rebuild the file handle/encoder/monitor fresh
+    # for each of the (at most two) attempts instead.
+    resp = _attempt(session["token"])
+    if resp.status_code == 401:
+        new_session = _do_refresh(args)
+        if new_session is None:
+            print("Session expired, please run 'homelab-cli login' again.", file=sys.stderr)
+            sys.exit(1)
+        resp = _attempt(new_session["token"])
+    _finish_progress()
+    return _print_response(resp)
 
 
 def cmd_file_meta(args):
@@ -341,7 +398,7 @@ def cmd_download_file(args):
         f"{api_url}/api/v1/drive/files/{args.id}",
         headers={"Authorization": f"Bearer {session['token']}"},
         params=params,
-        timeout=60,
+        timeout=None,
         stream=True,
     )
     return _save_binary_response(resp, args.output, f"file-{args.id}.bin")
