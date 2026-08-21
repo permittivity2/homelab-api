@@ -17,9 +17,10 @@ Depends: perl (>= 5.40),
  libdigest-sha-perl,
  libarchive-zip-perl,
  libimage-magick-perl,
+ libfile-libmagic-perl,
  postgresql-client,
  adduser
 Description: Homelab Drive background task processor
- Processes queued file tasks (sha256, delete, virus scan) out-of-band
+ Processes queued file tasks (content_type, sha256, delete, virus scan) out-of-band
  from the Homelab API workers. Runs as a standalone daemon managed
  by systemd. Can be deployed on the same host as the API or separately.

@@ -15,6 +15,7 @@ use File::Copy qw(copy);
 use File::Temp qw(tempdir);
 use Archive::Zip qw(:ERROR_CODES);
 use Image::Magick;
+use File::LibMagic;
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -44,6 +45,8 @@ my $DB_PASS = $db_cfg->{password};
 
 my $HOSTNAME   = hostname();
 my $WORKER_ID  = "$HOSTNAME:$$";
+
+my $MAGIC = File::LibMagic->new;
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +83,45 @@ sub disk_path {
 }
 
 # ── Task execution ───────────────────────────────────────────────────────────
+
+sub execute_content_type {
+    my ($dbh, $task) = @_;
+
+    my $data       = decode_json($task->{task_data} // '{}');
+    my $version_id = $data->{version_id} or die "No version_id in task_data\n";
+    my $uuid       = $data->{uuid}       or die "No uuid in task_data\n";
+
+    # Get user_id + file_id from file
+    my $row = $dbh->selectrow_hashref(
+        'SELECT f.id AS file_id, f.user_id FROM api.drive_files f
+         JOIN api.drive_versions v ON v.file_id = f.id
+         WHERE v.id = ?',
+        {}, $version_id
+    ) or die "Version $version_id not found\n";
+
+    my $path = disk_path($row->{user_id}, $uuid);
+    -f $path or die "File not on disk: $path\n";
+
+    # Never trust a client-declared Content-Type — sniff the actual bytes.
+    my $mime = $MAGIC->checktype_filename($path) // 'application/octet-stream';
+    log_info("Detected content-type for version $version_id: $mime ($path)");
+
+    $dbh->do('UPDATE api.drive_versions SET mime_type = ? WHERE id = ?', {}, $mime, $version_id);
+
+    # Only now that the real type is known do we decide whether this needs
+    # image-derivative work — a client's claimed (untrusted) type can no
+    # longer gate these tasks.
+    if ($mime =~ m{^image/}) {
+        for my $t (qw(thumbnail slide_show_image)) {
+            $dbh->do(
+                'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+                {}, $row->{file_id}, $t,
+                encode_json({ version_id => $version_id, uuid => $uuid }),
+                'queued'
+            );
+        }
+    }
+}
 
 sub execute_sha256 {
     my ($dbh, $task) = @_;
@@ -380,7 +422,9 @@ sub execute_slide_show_image {
 sub run_task {
     my ($dbh, $task) = @_;
 
-    if ($task->{task} eq 'sha256') {
+    if ($task->{task} eq 'content_type') {
+        execute_content_type($dbh, $task);
+    } elsif ($task->{task} eq 'sha256') {
         execute_sha256($dbh, $task);
     } elsif ($task->{task} eq 'delete') {
         execute_delete($dbh, $task);
@@ -443,7 +487,7 @@ sub run_child {
             q{SELECT id, file_id, task, task_data, retry_count
               FROM api.drive_files_tasks
               WHERE file_id = ? AND completed = FALSE AND retry_count < ?
-              ORDER BY inserted_at
+              ORDER BY inserted_at, id
               LIMIT 1},
             {}, $file_id, $MAX_RETRIES
         );

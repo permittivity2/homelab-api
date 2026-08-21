@@ -6,7 +6,6 @@ use Digest::SHA qw(sha256_hex);
 use File::Path qw(make_path);
 use File::Basename qw(dirname basename);
 use JSON::XS qw(encode_json decode_json);
-use MIME::Types;
 use Carp qw(croak);
 
 sub new {
@@ -83,7 +82,7 @@ sub _update_quota {
 }
 
 sub upload {
-    my ($self, $email, $file_name, $dir_id, $upload_obj, $declared_size, $mime) = @_;
+    my ($self, $email, $file_name, $dir_id, $upload_obj, $declared_size) = @_;
 
     my $user_id = $self->_user_id($email);
     return { error => 'User not found' } unless $user_id;
@@ -145,11 +144,12 @@ sub upload {
     );
     my $file_id = $file->{id};
 
-    # Insert version record (sha256 will be filled by processor)
+    # Insert version record — mime_type is never taken from the client;
+    # it's detected server-side by the processor's content_type task below.
     my $version = $self->{db}->query_row(
-        'INSERT INTO api.drive_versions (file_id, uuid, file_size, mime_type) VALUES (?, ?, ?, ?) '
+        'INSERT INTO api.drive_versions (file_id, uuid, file_size, mime_type) VALUES (?, ?, ?, NULL) '
         . 'RETURNING id, uuid, file_size, mime_type, created_at',
-        $file_id, $uuid, $file_size, $mime
+        $file_id, $uuid, $file_size
     );
 
     $self->{db}->query(
@@ -159,25 +159,23 @@ sub upload {
 
     $self->_update_quota($user_id, $file_size, 1);  # always a new file now
 
-    # Enqueue sha256 task — processor computes it out-of-band
+    # Enqueue content_type before sha256: detection only reads the file's
+    # header bytes (cheap) and its result decides whether thumbnail/
+    # slide_show_image tasks get queued, so it should resolve quickly and
+    # ahead of the potentially slow full-file sha256 hash.
+    $self->{db}->query(
+        'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
+        $file_id, 'content_type',
+        encode_json({ version_id => $version->{id}, uuid => $uuid }),
+        'queued'
+    );
+
     $self->{db}->query(
         'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
         $file_id, 'sha256',
         encode_json({ version_id => $version->{id}, uuid => $uuid }),
         'queued'
     );
-
-    # Enqueue thumbnail + slide_show_image tasks for image files
-    if ($mime && $mime =~ m{^image/}) {
-        for my $t (qw(thumbnail slide_show_image)) {
-            $self->{db}->query(
-                'INSERT INTO api.drive_files_tasks (file_id, task, task_data, status_text) VALUES (?, ?, ?, ?)',
-                $file_id, $t,
-                encode_json({ version_id => $version->{id}, uuid => $uuid }),
-                'queued'
-            );
-        }
-    }
 
     $version->{file_id} = $file_id;
 
