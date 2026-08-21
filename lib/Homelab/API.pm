@@ -5,6 +5,7 @@ use Homelab::Database;
 use Homelab::Auth;
 use Homelab::RateLimit;
 use Homelab::Drive;
+use Homelab::Mail;
 use Homelab::Roles;
 use Homelab::Utils::Password qw(hash_password);
 use Homelab::Utils::Passphrase qw(generate_passphrase);
@@ -16,6 +17,7 @@ my $db = Homelab::Database->new($config);
 my $auth = Homelab::Auth->new($db, $config);
 my $limiter = Homelab::RateLimit->new($db);
 my $drive = Homelab::Drive->new($db, $config);
+my $mail = Homelab::Mail->new($db, $config);
 my $roles = Homelab::Roles->new($db, $config);
 
 sub _set_json_response {
@@ -26,13 +28,19 @@ sub _set_json_response {
     $c->render(json => $data);
 }
 
-sub _auth_user {
+sub _bearer_token {
     my $c = shift;
     my $token;
     if (my $hdr = $c->req->headers->authorization) {
         ($token) = $hdr =~ /^Bearer\s+(.+)$/;
     }
     $token //= $c->cookie('homelab-token');
+    return $token;
+}
+
+sub _auth_user {
+    my $c = shift;
+    my $token = _bearer_token($c);
     return undef unless $token;
     my $result = $auth->validate($token);
     return $result->{error} ? undef : $result->{user}{email};
@@ -67,6 +75,9 @@ sub _auth_and_authorize {
         _set_json_response($c, { success => 0, error => 'Forbidden' }, 403);
         return undef;
     }
+    # Stashed for routes (e.g. /api/v1/mail/*) that need the raw JWT itself
+    # as a downstream credential, not just the email it resolves to.
+    $c->stash(user_jwt => _bearer_token($c));
     return $email;
 }
 
@@ -353,10 +364,11 @@ $d->post('/files' => sub ($c) {
 
     my $file_name = $upload->filename;
     my $dir_id = $c->param('dir_id');
-    my $mime = $upload->headers->content_type // 'application/octet-stream';
     my $size = $upload->size;
 
-    my $result = $drive->upload($email, $file_name, $dir_id, $upload, $size, $mime);
+    # Content-type is never taken from the client — the processor detects it
+    # server-side (content_type task) after upload.
+    my $result = $drive->upload($email, $file_name, $dir_id, $upload, $size);
     return _set_json_response($c, $result, $result->{error} ? 400 : 201);
 });
 
@@ -631,6 +643,23 @@ $d->post('/zip' => sub ($c) {
     my $dest_dir  = $json->{dir_id};   # undef = root; caller passes _currentDir()
     my $result    = $drive->queue_zip($email, $file_ids, $dir_ids, $dest_dir);
     return _set_json_response($c, $result, $result->{error} ? 400 : 202);
+});
+
+my $m = under '/api/v1/mail' => sub ($c) {
+    my $email = _auth_and_authorize($c);
+    return 0 unless $email;
+    $c->stash(user_email => $email);
+    return 1;
+};
+
+$m->get('/status' => sub ($c) {
+    my $email = $c->stash('user_email');
+    my $jwt   = $c->stash('user_jwt');
+    my $result = $mail->get_status($email, $jwt);
+    # 502, not 401/500: the caller's JWT is valid (that's how they got past
+    # the bridge above) -- a failure here is Dovecot/IMAP not cooperating,
+    # a downstream service failure, not an auth or client-input problem.
+    return _set_json_response($c, $result, $result->{error} ? 502 : 200);
 });
 
 # Admin routes — hardcoded to require the site_admin role, independent of

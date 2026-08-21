@@ -15,6 +15,7 @@ WriteMakefile(
         'Crypt::JWT'        => '0.0',
         'Crypt::Argon2'     => '0.0',
         'Crypt::URandom'    => '0.0',
+        'IO::Socket::SSL'   => '0.0',
         'JSON::XS'          => '4.0',
         'DateTime'          => '1.0',
     },

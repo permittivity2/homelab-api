@@ -39,3 +39,17 @@ storage:
   drive_path: /mnt/homelab-drive    # NFS mount for user Drive data
   max_file_size_mb: 10240             # Per-upload hard limit (10GB)
   max_concurrent_uploads: 4           # Advertised concurrency limit for clients
+
+# Mail API (IMAP) — see issue_tracking/015-dovecot-imap-api.md. Talks to
+# Dovecot as the caller's own JWT (via AUTHENTICATE OAUTHBEARER), so there
+# is no separate IMAP password to configure here.
+mail:
+  imap:
+    host: imap.mailmasker.org
+    port: 993
+    connect_timeout: 10   # seconds for the TCP+TLS+SASL handshake
+    command_timeout: 15   # seconds per IMAP command round-trip
+  pool:
+    max_size: 200          # cached IMAP connections per worker process (not shared across workers)
+    idle_timeout: 300      # seconds unused before a pooled connection is evicted
+    max_lifetime: 3300     # seconds before a pooled connection is force-recycled even if busy

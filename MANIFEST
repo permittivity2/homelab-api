@@ -11,11 +11,13 @@ migrations/002-drive-schema.sql
 migrations/003-drive-tasks-schema.sql
 migrations/004-sharing-folders.sql
 migrations/006-rbac-schema.sql
+migrations/007-mail-endpoint-permission.sql
 
 lib/Homelab/API.pm
 lib/Homelab/Database.pm
 lib/Homelab/Auth.pm
 lib/Homelab/Drive.pm
+lib/Homelab/Mail.pm
 lib/Homelab/RateLimit.pm
 lib/Homelab/Roles.pm
 lib/Homelab/Utils/JWT.pm
@@ -27,6 +29,7 @@ script/homelab-api
 t/database.t
 t/auth.t
 t/drive.t
+t/mail.t
 t/rate_limit.t
 t/roles.t
 
