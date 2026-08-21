@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Command-line client for the Homelab API.
 
-Wraps every homelab-api REST endpoint as a flat subcommand. Persists a
+Wraps every homelab-api REST endpoint as a subcommand, grouped by area
+(e.g. `homelab-cli drive quota`, `homelab-cli admin list-roles`); a few
+session/auth commands (login, logout, configure, health, ...) stay
+top-level since they're used before any group context applies. Persists a
 login session (JWT + refresh token) under ~/.config/homelab-cli/ and
 transparently refreshes an expired JWT on the caller's behalf.
 """
@@ -308,6 +311,14 @@ def cmd_health(args):
 
 
 # ---------------------------------------------------------------------------
+# Mail (IMAP) handlers
+# ---------------------------------------------------------------------------
+
+def cmd_mail_status(args):
+    return _print_response(_request(args, "GET", "/api/v1/mail/status"))
+
+
+# ---------------------------------------------------------------------------
 # Drive - public share handlers (no auth)
 # ---------------------------------------------------------------------------
 
@@ -610,6 +621,20 @@ def build_parser():
         p.set_defaults(func=func)
         return p
 
+    def add_group(name, help_):
+        """Registers a top-level command group (e.g. 'drive') and returns an
+        `add`-like helper scoped to that group's own nested subcommands, so
+        call sites read identically to the flat add(...) calls above."""
+        group_parser = sub.add_parser(name, help=help_, description=help_)
+        group_sub = group_parser.add_subparsers(dest="subcommand", required=True, metavar="command")
+
+        def add_sub(subname, func, help_, description=None):
+            p = group_sub.add_parser(subname, help=help_, description=description or help_)
+            p.set_defaults(func=func)
+            return p
+
+        return add_sub
+
     # --- Session / configuration ---
     p = add("login", cmd_login, "Log in and save a session for later commands.")
     p.add_argument("--email", help="Account email. Prompted if omitted.")
@@ -625,72 +650,77 @@ def build_parser():
     add("refresh", cmd_refresh, "Manually refresh the JWT using the saved refresh token.")
     add("health", cmd_health, "Check API/database health (no auth required).")
 
-    # --- Drive: public share (no auth) ---
-    p = add("share-meta", cmd_share_meta, "Get metadata for a public file share link.")
+    # --- Mail (IMAP) ---
+    mail = add_group("mail", "Mail (IMAP) operations.")
+    mail("status", cmd_mail_status, "Show INBOX unseen/total message counts.")
+
+    # --- Drive (file/directory/share operations) ---
+    drive = add_group("drive", "Drive file/directory/share operations.")
+
+    p = drive("share-meta", cmd_share_meta, "Get metadata for a public file share link.")
     p.add_argument("token", help="Share token from the share URL.")
 
-    p = add("share-dir", cmd_share_dir, "Get metadata + file list for a public directory share link.")
+    p = drive("share-dir", cmd_share_dir, "Get metadata + file list for a public directory share link.")
     p.add_argument("token", help="Share token from the share URL.")
 
-    p = add("share-download", cmd_share_download, "Download a file via a public share link.")
+    p = drive("share-download", cmd_share_download, "Download a file via a public share link.")
     p.add_argument("token", help="Share token from the share URL.")
     p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
 
-    # --- Drive: authenticated ---
-    add("quota", cmd_quota, "Show usage/limit/file count for the current user.")
+    drive("quota", cmd_quota, "Show usage/limit/file count for the current user.")
 
-    p = add("file-info", cmd_file_info, "List files by path or directory id.")
+    p = drive("file-info", cmd_file_info, "List files by path or directory id.")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--path", help="List files under this path (root-relative).")
     g.add_argument("--dir-id", help="List files in this directory id.")
     p.add_argument("--startat", type=int, help="Pagination offset (1000 results/page).")
     p.add_argument("--recursive", action="store_true", help="Recurse into subdirectories.")
 
-    p = add("upload-file", cmd_upload_file, "Upload a local file to Drive.")
+    p = drive("upload-file", cmd_upload_file, "Upload a local file to Drive.")
     p.add_argument("file", help="Local file path to upload.")
     p.add_argument("--dir-id", help="Destination directory id. Default: root.")
 
-    p = add("file-meta", cmd_file_meta, "Show lightweight metadata for a file (no disk I/O).")
+    p = drive("file-meta", cmd_file_meta, "Show lightweight metadata for a file (no disk I/O).")
     p.add_argument("id", help="File id.")
     p.add_argument("--version", help="Specific version id. Default: current version.")
 
-    p = add("download-file", cmd_download_file, "Download a file's content.")
+    p = drive("download-file", cmd_download_file, "Download a file's content.")
     p.add_argument("id", help="File id.")
     p.add_argument("--version", help="Specific version id. Default: current version.")
     p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
 
-    p = add("trash-file", cmd_trash_file, "Move a file to Trash (soft delete).")
+    p = drive("trash-file", cmd_trash_file, "Move a file to Trash (soft delete).")
     p.add_argument("id", help="File id.")
 
-    p = add("move-file", cmd_move_file, "Move (or rename via path) a file.")
+    p = drive("move-file", cmd_move_file, "Move (or rename via path) a file.")
     p.add_argument("id", help="File id.")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--to-path", help="Destination path.")
     g.add_argument("--dir-id", help="Destination directory id.")
 
-    p = add("copy-file", cmd_copy_file, "Queue an async copy of a file.")
+    p = drive("copy-file", cmd_copy_file, "Queue an async copy of a file.")
     p.add_argument("id", help="File id.")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--to-path", help="Destination path.")
     g.add_argument("--dir-id", help="Destination directory id.")
     p.add_argument("--name", help="Optional new name for the copy.")
 
-    p = add("file-versions", cmd_file_versions, "List all versions of a file.")
+    p = drive("file-versions", cmd_file_versions, "List all versions of a file.")
     p.add_argument("id", help="File id.")
 
-    add("list-trash", cmd_list_trash, "List trashed files with their original path.")
+    drive("list-trash", cmd_list_trash, "List trashed files with their original path.")
 
-    p = add("restore-file", cmd_restore_file, "Restore one file from Trash.")
+    p = drive("restore-file", cmd_restore_file, "Restore one file from Trash.")
     p.add_argument("id", help="File id.")
 
-    add("empty-trash", cmd_empty_trash, "Permanently empty Trash (frees quota, deletes on-disk data).")
+    drive("empty-trash", cmd_empty_trash, "Permanently empty Trash (frees quota, deletes on-disk data).")
 
-    add("trash-dir", cmd_trash_dir, "Get (or create) the user's Trash directory id.")
+    drive("trash-dir", cmd_trash_dir, "Get (or create) the user's Trash directory id.")
 
-    p = add("list-directories", cmd_list_directories, "List directories.")
+    p = drive("list-directories", cmd_list_directories, "List directories.")
     p.add_argument("--parent-id", help="List only direct children of this directory. Default: all directories, flat.")
 
-    p = add("create-directory", cmd_create_directory, "Create a directory.")
+    p = drive("create-directory", cmd_create_directory, "Create a directory.")
     p.add_argument("--name", required=True, help="Directory name.")
     p.add_argument(
         "--parent-id",
@@ -699,94 +729,96 @@ def build_parser():
              "as a literal (invalid) directory id, not as \"no parent\".",
     )
 
-    p = add("delete-directory", cmd_delete_directory, "Recursively trash and delete a directory tree.")
+    p = drive("delete-directory", cmd_delete_directory, "Recursively trash and delete a directory tree.")
     p.add_argument("id", help="Directory id.")
 
-    p = add("update-directory", cmd_update_directory, "Move or rename a directory.")
+    p = drive("update-directory", cmd_update_directory, "Move or rename a directory.")
     p.add_argument("id", help="Directory id.")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--parent-id", help="Move under this parent directory id.")
     g.add_argument("--name", help="Rename to this name.")
 
-    p = add("share-file", cmd_share_file, "Create a share for a file.")
+    p = drive("share-file", cmd_share_file, "Create a share for a file.")
     p.add_argument("id", help="File id.")
     p.add_argument("--share-with", help="Email to share with. Omit for a public link.")
     p.add_argument("--permission", choices=["read", "write"], help="Default: read.")
 
-    p = add("share-directory", cmd_share_directory, "Create a share for a directory.")
+    p = drive("share-directory", cmd_share_directory, "Create a share for a directory.")
     p.add_argument("id", help="Directory id.")
     p.add_argument("--share-with", help="Email to share with. Omit for a public link.")
     p.add_argument("--permission", choices=["read", "write"], help="Default: read.")
 
-    add("list-shares", cmd_list_shares, "List shares you created.")
-    add("list-shares-with-me", cmd_list_shares_with_me, "List shares others created targeting you.")
+    drive("list-shares", cmd_list_shares, "List shares you created.")
+    drive("list-shares-with-me", cmd_list_shares_with_me, "List shares others created targeting you.")
 
-    p = add("delete-share", cmd_delete_share, "Revoke a share you own.")
+    p = drive("delete-share", cmd_delete_share, "Revoke a share you own.")
     p.add_argument("id", help="Share id.")
 
-    p = add("bulk-trash", cmd_bulk_trash, "Trash multiple files/directories at once.")
+    p = drive("bulk-trash", cmd_bulk_trash, "Trash multiple files/directories at once.")
     p.add_argument("--file-ids", nargs="+", help="File ids to trash.")
     p.add_argument("--dir-ids", nargs="+", help="Directory ids to trash.")
     p.add_argument("--current-dir-id", help="Directory the file-ids are expected to be in (stale-selection guard).")
 
-    p = add("bulk-restore", cmd_bulk_restore, "Restore multiple files from Trash at once.")
+    p = drive("bulk-restore", cmd_bulk_restore, "Restore multiple files from Trash at once.")
     p.add_argument("--file-ids", nargs="+", help="File ids to restore.")
     p.add_argument("--dir-id", help="Destination directory id. Default: root.")
 
-    p = add("bulk-move", cmd_bulk_move, "Move multiple files/directories at once.")
+    p = drive("bulk-move", cmd_bulk_move, "Move multiple files/directories at once.")
     p.add_argument("--file-ids", nargs="+", help="File ids to move.")
     p.add_argument("--dir-ids", nargs="+", help="Directory ids to move.")
     p.add_argument("--dir-id", help="Destination directory id. Default: root.")
 
-    p = add("bulk-copy", cmd_bulk_copy, "Copy multiple files/directories at once.")
+    p = drive("bulk-copy", cmd_bulk_copy, "Copy multiple files/directories at once.")
     p.add_argument("--file-ids", nargs="+", help="File ids to copy.")
     p.add_argument("--dir-ids", nargs="+", help="Directory ids to copy.")
     p.add_argument("--dir-id", help="Destination directory id. Default: root.")
 
-    p = add("create-zip", cmd_create_zip, "Queue an async zip of files/directories.")
+    p = drive("create-zip", cmd_create_zip, "Queue an async zip of files/directories.")
     p.add_argument("--file-ids", nargs="+", help="File ids to include.")
     p.add_argument("--dir-ids", nargs="+", help="Directory ids to include.")
     p.add_argument("--dir-id", required=True, help="Destination directory id for the resulting zip.")
 
     # --- Admin (site_admin only) ---
-    add("admin-list-roles", cmd_admin_list_roles, "[admin] List all roles.")
+    admin = add_group("admin", "Site administration (roles/permissions/user management).")
 
-    p = add("admin-role-permissions", cmd_admin_role_permissions, "[admin] List endpoints granted to a role.")
+    admin("list-roles", cmd_admin_list_roles, "List all roles.")
+
+    p = admin("role-permissions", cmd_admin_role_permissions, "List endpoints granted to a role.")
     p.add_argument("role", help="Role name (e.g. user, site_admin).")
 
-    p = add("admin-grant-permission", cmd_admin_grant_permission, "[admin] Grant an endpoint to a role.")
+    p = admin("grant-permission", cmd_admin_grant_permission, "Grant an endpoint to a role.")
     p.add_argument("role", help="Role name.")
     p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
 
-    p = add("admin-revoke-permission", cmd_admin_revoke_permission, "[admin] Revoke an endpoint from a role.")
+    p = admin("revoke-permission", cmd_admin_revoke_permission, "Revoke an endpoint from a role.")
     p.add_argument("role", help="Role name.")
     p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
 
-    p = add("admin-user-roles", cmd_admin_user_roles, "[admin] List a user's roles.")
+    p = admin("user-roles", cmd_admin_user_roles, "List a user's roles.")
     p.add_argument("email", help="Target account email.")
 
-    p = add("admin-grant-role", cmd_admin_grant_role, "[admin] Assign a role to a user.")
+    p = admin("grant-role", cmd_admin_grant_role, "Assign a role to a user.")
     p.add_argument("email", help="Target account email.")
     p.add_argument("--role", required=True, help="Role name to assign.")
 
-    p = add("admin-revoke-role", cmd_admin_revoke_role, "[admin] Revoke a role from a user.")
+    p = admin("revoke-role", cmd_admin_revoke_role, "Revoke a role from a user.")
     p.add_argument("email", help="Target account email.")
     p.add_argument("role", help="Role name to revoke.")
 
-    p = add(
-        "admin-reset-password", cmd_admin_reset_password,
-        "[admin] Reset a user's password to a random passphrase (returned once).",
+    p = admin(
+        "reset-password", cmd_admin_reset_password,
+        "Reset a user's password to a random passphrase (returned once).",
         description="Resets the target user's password to a randomly generated dictionary "
                      "passphrase. Never accepts a client-supplied password. The new plaintext "
                      "passphrase is printed once in the response and is not recoverable afterward.",
     )
     p.add_argument("email", help="Target account email.")
 
-    p = add("admin-revoke-tokens", cmd_admin_revoke_tokens, "[admin] Revoke all of a user's refresh tokens.")
+    p = admin("revoke-tokens", cmd_admin_revoke_tokens, "Revoke all of a user's refresh tokens.")
     p.add_argument("email", help="Target account email.")
 
-    p = add("admin-force-relogin", cmd_admin_force_relogin,
-            "[admin] Force a user to re-login (identical action to admin-revoke-tokens).")
+    p = admin("force-relogin", cmd_admin_force_relogin,
+              "Force a user to re-login (identical action to revoke-tokens).")
     p.add_argument("email", help="Target account email.")
 
     return parser

@@ -1,1 +1,4 @@
 debian/homelab-cli.8
+debian/homelab-cli-mail.8
+debian/homelab-cli-drive.8
+debian/homelab-cli-admin.8

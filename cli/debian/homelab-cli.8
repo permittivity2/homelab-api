@@ -1,4 +1,4 @@
-.TH HOMELAB-CLI 8 "2026-08-09" "homelab-cli" "System Administration"
+.TH HOMELAB-CLI 8 "2026-08-21" "homelab-cli" "System Administration"
 .SH NAME
 homelab-cli \- command-line client for the Homelab API
 .SH SYNOPSIS
@@ -6,6 +6,7 @@ homelab-cli \- command-line client for the Homelab API
 .RB [ --api-url
 .IR url ]
 .I command
+.RI [ subcommand ]
 .RI [ args ...]
 .SH DESCRIPTION
 .B homelab-cli
@@ -16,10 +17,24 @@ REST API. It is intended for use by an account holding the
 role, though most subcommands work for any authenticated account
 according to that account's own role permissions.
 .P
-Every REST call is exposed as its own flat subcommand (a "bareword"),
+A handful of session/auth commands are top-level (see COMMANDS below).
+Every other REST call is grouped under a command family \- currently
+.BR mail
+(IMAP operations, documented in
+.BR homelab-cli-mail (8)),
+.BR drive
+(file/directory/share operations, documented in
+.BR homelab-cli-drive (8))
+and
+.BR admin
+(site administration, documented in
+.BR homelab-cli-admin (8))
+\- invoked as
+.RI "\(lqhomelab-cli " group " " subcommand "\(rq,"
 e.g.
-.BR quota ", " list-directories ", " admin-reset-password .
-There are no nested command groups.
+.BR "homelab-cli mail status" ", " "homelab-cli drive quota" ,
+or
+.BR "homelab-cli admin list-roles" .
 .P
 .B homelab-cli login
 saves a session (JWT and refresh token) to a local file. Every other
@@ -37,12 +52,13 @@ the cached configuration \- use
 to change the cached value permanently.
 .TP
 .B -h ", " --help
-Show a list of all commands (or, given after a command name, that
-command's own arguments). Every command has full
+Show a list of all commands (or, given after a command/group name,
+that command's or group's own subcommands/arguments). Every command
+has full
 .B --help
 text; this man page intentionally does not duplicate per-command flag
 documentation \- run
-.RI "\(lqhomelab-cli " command " --help\(rq"
+.RI "\(lqhomelab-cli " "[group] command" " --help\(rq"
 for that.
 .SH COMMANDS
 .SS "Session & configuration"
@@ -66,55 +82,21 @@ View or permanently change the cached API base URL.
 Check the current JWT, get the email bound to it, manually force a
 refresh, or check API/database health (no auth required for
 .BR health ).
-.SS "Drive \- public shares (no auth)"
+.SS "Command groups"
 .TP
-.BR share-meta ", " share-dir ", " share-download
-Read metadata for a public file or directory share link, or download
-the shared file directly.
-.SS "Drive \- files and directories"
+.B mail
+IMAP operations (currently: unread/total message counts). See
+.BR homelab-cli-mail (8).
 .TP
-.BR quota ", " file-info ", " upload-file ", " file-meta ", " download-file
-.TQ
-.BR trash-file ", " move-file ", " copy-file ", " file-versions
-.TQ
-.BR list-trash ", " restore-file ", " empty-trash ", " trash-dir
-.TQ
-.BR list-directories ", " create-directory ", " delete-directory ", " update-directory
-Usage/quota, file and directory CRUD, trash/restore, and version
-listing. See
-.RI "\(lqhomelab-cli " command " --help\(rq"
-for each command's arguments.
-.SS "Drive \- sharing and bulk operations"
+.B drive
+File, directory, and sharing operations. See
+.BR homelab-cli-drive (8).
 .TP
-.BR share-file ", " share-directory ", " list-shares ", " list-shares-with-me ", " delete-share
-.TQ
-.BR bulk-trash ", " bulk-restore ", " bulk-move ", " bulk-copy ", " create-zip
-Create/list/revoke shares, and operate on multiple files/directories
-in one call.
-.SS "Administration (site_admin only)"
-.TP
-.BR admin-list-roles ", " admin-role-permissions
-List all roles, or the endpoints granted to a specific role.
-.TP
-.BR admin-grant-permission ", " admin-revoke-permission
-Grant or revoke an endpoint (e.g.
-.RI \(lqGET\ /api/v1/drive/quota\(rq )
-on a role.
-.TP
-.BR admin-user-roles ", " admin-grant-role ", " admin-revoke-role
-List, assign, or revoke a role on a specific user account.
-.TP
-.B admin-reset-password
-Reset a user's password to a randomly generated dictionary passphrase.
-Never accepts a client-supplied password \- the new passphrase is
-generated server-side and printed exactly once in the response. It is
-not recoverable afterward; if lost, reset again.
-.TP
-.BR admin-revoke-tokens ", " admin-force-relogin
-Revoke all of a user's refresh tokens, forcing re-login on their next
-token refresh. Both commands perform the identical action against two
-distinct server endpoints of the same name \- pick whichever name reads
-better in context.
+.B admin
+Role, permission, and user-management operations (requires
+.I site_admin
+server-side). See
+.BR homelab-cli-admin (8).
 .SH FILES
 .TP
 .I ~/.config/homelab-cli/config.json
@@ -128,7 +110,7 @@ an SSH private key. Deleted by
 .BR logout .
 .TP
 .I /usr/share/bash-completion/completions/homelab-cli
-Bash tab-completion for subcommand names and their common flags.
+Bash tab-completion for command/group names and their common flags.
 Installed automatically; no user action needed as long as the
 .B bash-completion
 package is installed and enabled in your shell.
@@ -163,11 +145,15 @@ privileges that account holds. Protect it accordingly \- it is created
 mode 0600, but back up your own vigilance (e.g. don't copy your
 .I ~/.config/homelab-cli
 directory into a shared location or a public dotfiles repository).
-.B admin-*
-commands additionally require the logged-in account to hold the
-.I site_admin
-role server-side; the CLI does not enforce this locally, the server does.
+See
+.BR homelab-cli-admin (8)
+for the additional server-side privilege requirements on
+.B admin
+subcommands.
 .SH SEE ALSO
-.BR homelab-api (8)
+.BR homelab-api (8),
+.BR homelab-cli-mail (8),
+.BR homelab-cli-drive (8),
+.BR homelab-cli-admin (8)
 .SH AUTHOR
 Jeff Gardner <mailmasker-api01@forge.name>

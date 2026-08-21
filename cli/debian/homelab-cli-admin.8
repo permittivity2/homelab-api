@@ -1,0 +1,52 @@
+.TH HOMELAB-CLI-ADMIN 8 "2026-08-21" "homelab-cli" "System Administration"
+.SH NAME
+homelab-cli\-admin \- site administration commands for homelab\-cli
+.SH SYNOPSIS
+.B homelab-cli
+.RB [ --api-url
+.IR url ]
+.B admin
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B homelab-cli admin
+groups role, permission, and user-management operations under one
+command family. Every subcommand requires the logged-in account to
+hold the
+.I site_admin
+role server-side; the CLI does not enforce this locally, the server
+does.
+.P
+Run
+.RI "\(lqhomelab-cli admin " command " --help\(rq"
+for a given subcommand's own arguments.
+.SH COMMANDS
+.TP
+.BR list-roles ", " role-permissions
+List all roles, or the endpoints granted to a specific role.
+.TP
+.BR grant-permission ", " revoke-permission
+Grant or revoke an endpoint (e.g.
+.RI \(lqGET\ /api/v1/drive/quota\(rq )
+on a role.
+.TP
+.BR user-roles ", " grant-role ", " revoke-role
+List, assign, or revoke a role on a specific user account.
+.TP
+.B reset-password
+Reset a user's password to a randomly generated dictionary passphrase.
+Never accepts a client-supplied password \- the new passphrase is
+generated server-side and printed exactly once in the response. It is
+not recoverable afterward; if lost, reset again.
+.TP
+.BR revoke-tokens ", " force-relogin
+Revoke all of a user's refresh tokens, forcing re-login on their next
+token refresh. Both commands perform the identical action against two
+distinct server endpoints of the same name \- pick whichever name reads
+better in context.
+.SH SEE ALSO
+.BR homelab-cli (8),
+.BR homelab-cli-mail (8),
+.BR homelab-cli-drive (8)
+.SH AUTHOR
+Jeff Gardner <mailmasker-api01@forge.name>

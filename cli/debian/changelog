@@ -1,3 +1,16 @@
+homelab-cli (0.2.0) unstable; urgency=medium
+
+  * BREAKING: replace flat subcommands with grouped `<group> <command>`
+    invocation (e.g. `quota` -> `drive quota`, `admin-list-roles` ->
+    `admin list-roles`). No backward-compatible aliases for old command
+    names. Man page split into homelab-cli(8) (overview) plus
+    homelab-cli-drive(8) and homelab-cli-admin(8) (per-group reference).
+  * Add `mail status` command (new `mail` group), showing INBOX
+    unseen/total message counts via the new GET /api/v1/mail/status
+    endpoint. New homelab-cli-mail(8) man page.
+
+ -- Gardner <gardner@homelab>  Fri, 21 Aug 2026 17:53:20 -0500
+
 homelab-cli (0.1.6) unstable; urgency=medium
 
   * Release v0.1.6

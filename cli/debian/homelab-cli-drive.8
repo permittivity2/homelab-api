@@ -1,0 +1,74 @@
+.TH HOMELAB-CLI-DRIVE 8 "2026-08-21" "homelab-cli" "System Administration"
+.SH NAME
+homelab-cli\-drive \- Drive (file/directory/share) commands for homelab\-cli
+.SH SYNOPSIS
+.B homelab-cli
+.RB [ --api-url
+.IR url ]
+.B drive
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B homelab-cli drive
+groups every Drive-related REST call under one command family. All
+subcommands require a saved login (see
+.BR homelab-cli (8)) except the public-share commands, which take a
+share token instead and need no authentication.
+.P
+Run
+.RI "\(lqhomelab-cli drive " command " --help\(rq"
+for a given subcommand's own arguments; this page only summarizes what
+each one does.
+.SH "PUBLIC SHARES (NO AUTH)"
+.TP
+.B share-meta
+Get metadata for a public file share link.
+.TP
+.B share-dir
+Get metadata and file list for a public directory share link.
+.TP
+.B share-download
+Download a file via a public share link.
+.SH "FILES AND DIRECTORIES"
+.TP
+.B quota
+Show usage/limit/file count for the current user.
+.TP
+.BR file-info ", " file-meta ", " file-versions
+List files by path or directory id, show lightweight metadata for one
+file, or list all of a file's versions.
+.TP
+.BR upload-file ", " download-file
+Upload a local file, or download a file's content.
+.TP
+.BR trash-file ", " move-file ", " copy-file
+Soft-delete, move/rename, or queue an async copy of a file.
+.TP
+.BR list-trash ", " restore-file ", " empty-trash ", " trash-dir
+List trashed files, restore one, permanently empty Trash, or get/create
+the user's Trash directory id.
+.TP
+.BR list-directories ", " create-directory ", " delete-directory ", " update-directory
+Directory CRUD: list, create, recursively delete, move/rename.
+.SH "SHARING AND BULK OPERATIONS"
+.TP
+.BR share-file ", " share-directory
+Create a share for a file or directory (omit
+.B --share-with
+for a public link).
+.TP
+.BR list-shares ", " list-shares-with-me ", " delete-share
+List shares you created, shares others created targeting you, or
+revoke a share you own.
+.TP
+.BR bulk-trash ", " bulk-restore ", " bulk-move ", " bulk-copy
+Operate on multiple files/directories at once.
+.TP
+.B create-zip
+Queue an async zip of files/directories into a destination directory.
+.SH SEE ALSO
+.BR homelab-cli (8),
+.BR homelab-cli-mail (8),
+.BR homelab-cli-admin (8)
+.SH AUTHOR
+Jeff Gardner <mailmasker-api01@forge.name>
