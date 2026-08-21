@@ -122,21 +122,48 @@ EOF
                 echo "NOTE: could not verify database connectivity during install."
                 echo "      Double-check $CONFIG_FILE and 'systemctl restart homelab-api' once fixed."
             fi
+        else
+            # Upgrade of an already-configured install: read DB connection
+            # info back out of the existing config file instead of debconf
+            # (whose answers were only ever populated for a first install).
+            DB_HOST="$(perl -MYAML::XS=LoadFile -e 'print LoadFile($ARGV[0])->{database}{host} // ""' "$CONFIG_FILE" 2>/dev/null || true)"
+            DB_PORT="$(perl -MYAML::XS=LoadFile -e 'print LoadFile($ARGV[0])->{database}{port} // ""' "$CONFIG_FILE" 2>/dev/null || true)"
+            DB_NAME="$(perl -MYAML::XS=LoadFile -e 'print LoadFile($ARGV[0])->{database}{name} // ""' "$CONFIG_FILE" 2>/dev/null || true)"
+            DB_USER="$(perl -MYAML::XS=LoadFile -e 'print LoadFile($ARGV[0])->{database}{user} // ""' "$CONFIG_FILE" 2>/dev/null || true)"
+            DB_PASS="$(perl -MYAML::XS=LoadFile -e 'print LoadFile($ARGV[0])->{database}{password} // ""' "$CONFIG_FILE" 2>/dev/null || true)"
+        fi
 
-            # Apply this package's own schema (api.*, drive.*) — idempotent (CREATE ... IF NOT EXISTS).
-            # Not run against dovecot.users, which is owned by the mail server, not this package.
-            if command -v psql >/dev/null 2>&1 && [ -d "$MIGRATIONS_DIR" ]; then
-                echo "Applying database schema migrations..."
-                for f in "$MIGRATIONS_DIR"/*.sql; do
-                    [ -f "$f" ] || continue
-                    if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-                            -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>&1; then
-                        echo "  applied $(basename "$f")"
-                    else
-                        echo "  WARNING: failed to apply $(basename "$f") — check connectivity/permissions and re-run by hand."
-                    fi
-                done
-            fi
+        # Apply this package's own schema (api.*, drive.*) — idempotent
+        # (CREATE ... IF NOT EXISTS / ON CONFLICT DO NOTHING), so it's safe
+        # to run this on EVERY configure, not just a first install: an
+        # upgrade that adds a new migration file needs this to actually run
+        # for existing installs, or the new migration silently never gets
+        # applied (a real gap found and fixed alongside issue #015's
+        # migrations/007-mail-endpoint-permission.sql). Not run against
+        # dovecot.users, which is owned by the mail server, not this package.
+        #
+        # On an upgrade, this runs as whatever DB role config.yml already
+        # holds (typically the low-privilege homelab_api app role, not a
+        # superuser) — fine for DML-only migrations like 007, but older
+        # schema-creating migrations (CREATE SCHEMA/GRANT, originally run by
+        # hand with elevated DB credentials) may log a harmless permission
+        # warning here on every future upgrade since that role was never
+        # granted CREATE on the api schema itself. That's expected noise,
+        # not a new failure — those migrations are already applied.
+        if command -v psql >/dev/null 2>&1 && [ -d "$MIGRATIONS_DIR" ] && [ -n "$DB_HOST" ] && [ -n "$DB_NAME" ] && [ -n "$DB_USER" ]; then
+            echo "Applying database schema migrations..."
+            for f in "$MIGRATIONS_DIR"/*.sql; do
+                [ -f "$f" ] || continue
+                if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                        -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>&1; then
+                    echo "  applied $(basename "$f")"
+                else
+                    echo "  WARNING: failed to apply $(basename "$f") — check connectivity/permissions and re-run by hand."
+                fi
+            done
+        elif [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
+            echo "WARNING: could not read database connection info from $CONFIG_FILE —"
+            echo "         skipping migrations. Apply $MIGRATIONS_DIR/*.sql by hand if needed."
         fi
 
         if systemctl is-enabled homelab-api >/dev/null 2>&1; then
