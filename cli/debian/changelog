@@ -1,3 +1,9 @@
+homelab-cli (0.2.1) unstable; urgency=medium
+
+  * Release v0.2.1
+
+ -- Gardner <gardner@homelab>  Fri, 21 Aug 2026 18:31:02 -0500
+
 homelab-cli (0.2.0) unstable; urgency=medium
 
   * BREAKING: replace flat subcommands with grouped `<group> <command>`
