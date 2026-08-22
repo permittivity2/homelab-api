@@ -37,11 +37,20 @@ sub new {
     my $imap_cfg = $mail_cfg->{imap} // {};
     my $pool_cfg = $mail_cfg->{pool} // {};
 
+    # No default host/port: which mail server this talks to is inherently
+    # environment-specific (a different deployment could point at a
+    # completely different server), so config.yml MUST say explicitly --
+    # fail fast at startup rather than silently guessing.
+    my $host = $imap_cfg->{host}
+        or die "Homelab::Mail: mail.imap.host is required in config.yml\n";
+    my $port = $imap_cfg->{port}
+        or die "Homelab::Mail: mail.imap.port is required in config.yml\n";
+
     my $self = {
         db   => $db,
         imap => {
-            host            => $imap_cfg->{host} // 'imap.mailmasker.org',
-            port            => $imap_cfg->{port} // 993,
+            host            => $host,
+            port            => $port,
             connect_timeout => $imap_cfg->{connect_timeout} // 10,
             command_timeout => $imap_cfg->{command_timeout} // 15,
         },
@@ -205,6 +214,297 @@ sub get_part {
     });
     return { error => $err } if $err;
     return $result;
+}
+
+# Phase 3: mutating operations. Everything above this point only ever uses
+# .PEEK FETCHes -- nothing could accidentally change a live mailbox. From
+# here down that's no longer true, so each method documents specifically
+# how it avoids surprising/irreversible damage.
+
+# Finds messages matching %criteria via IMAP SEARCH. Every string-valued
+# criterion is routed through _imap_quote -- never interpolate user input
+# directly into the SEARCH command line. Returns full headers (same shape
+# as list_messages), newest first, capped at $criteria->{limit}.
+sub search_messages {
+    my ($self, $email, $jwt, $folder, $criteria) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    $folder = 'INBOX' unless defined $folder && length $folder;
+    $criteria = {} unless ref $criteria eq 'HASH';
+
+    my $search_str = eval { _build_search_criteria($criteria) };
+    if ($@) {
+        (my $msg = $@) =~ s/\n$//;
+        return { error => $msg };
+    }
+
+    my $limit = $criteria->{limit};
+    $limit = 50 unless defined $limit && $limit =~ /^\d+$/ && $limit > 0;
+    $limit = 200 if $limit > 200;
+
+    my ($result, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $sel = $self->_imap_select($conn, $folder);
+        die $sel->{error} if $sel->{error};
+
+        my $uids = $self->_imap_uid_search($conn, $search_str);
+        die "IMAP SEARCH command failed\n" unless $uids;
+        return { total => 0, messages => [] } unless @$uids;
+
+        my @wanted = reverse @$uids; # newest first
+        my $total  = scalar @wanted;
+        @wanted = @wanted[0 .. $limit - 1] if @wanted > $limit;
+
+        my $messages = $self->_imap_uid_fetch_headers($conn, join(',', @wanted));
+        die "IMAP FETCH command failed\n" unless $messages;
+
+        # _imap_uid_fetch_headers' result order follows the server's FETCH
+        # response order, not necessarily @wanted's -- reorder to match.
+        my %by_uid = map { $_->{uid} => $_ } @$messages;
+        return { total => $total, messages => [ grep { $_ } map { $by_uid{$_ + 0} } @wanted ] };
+    });
+    return { error => $err } if $err;
+    return { success => 1, folder => $folder, %$result };
+}
+
+# Adds/removes flags on a message. One general primitive (matching
+# get_part's "one thing handles every content type" style) rather than
+# separate mark-read/mark-unread/flag/unflag methods -- callers pass
+# add=>['\Seen'] or remove=>['\Seen'] etc.
+sub set_flags {
+    my ($self, $email, $jwt, $folder, $uid, $add, $remove) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder or uid' } unless $folder && $uid;
+    $add    = [] unless ref $add eq 'ARRAY';
+    $remove = [] unless ref $remove eq 'ARRAY';
+    return { error => 'Must specify at least one flag to add or remove' }
+        unless @$add || @$remove;
+    for (@$add, @$remove) {
+        return { error => "Invalid flag: $_" } unless /^\\?[A-Za-z0-9]+$/;
+    }
+
+    my ($result, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $sel = $self->_imap_select($conn, $folder);
+        die $sel->{error} if $sel->{error};
+
+        my $existing = $self->_imap_uid_fetch($conn, $uid, 'FLAGS');
+        die "IMAP FETCH command failed\n" unless $existing;
+        die "Message not found: UID $uid\n" unless %$existing;
+
+        if (@$add) {
+            my $r = $self->_imap_uid_store($conn, $uid, '+FLAGS', $add);
+            die "IMAP STORE command failed\n" unless $r;
+        }
+        if (@$remove) {
+            my $r = $self->_imap_uid_store($conn, $uid, '-FLAGS', $remove);
+            die "IMAP STORE command failed\n" unless $r;
+        }
+
+        my $final = $self->_imap_uid_fetch($conn, $uid, 'FLAGS');
+        die "IMAP FETCH command failed\n" unless $final;
+        return { flags => $final->{FLAGS} || [] };
+    });
+    return { error => $err } if $err;
+    return { success => 1, uid => $uid + 0, flags => $result->{flags} };
+}
+
+# Moves a message to another folder via the confirmed MOVE capability
+# (RFC 6851) -- one atomic command, not a COPY+STORE+EXPUNGE dance.
+sub move_message {
+    my ($self, $email, $jwt, $folder, $uid, $dest_folder) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder, uid, or destination folder' }
+        unless $folder && $uid && defined $dest_folder && length $dest_folder;
+    return { error => 'Source and destination folder are the same' }
+        if $folder eq $dest_folder;
+
+    my ($result, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $sel = $self->_imap_select($conn, $folder);
+        die $sel->{error} if $sel->{error};
+
+        my $existing = $self->_imap_uid_fetch($conn, $uid, 'FLAGS');
+        die "IMAP FETCH command failed\n" unless $existing;
+        die "Message not found: UID $uid\n" unless %$existing;
+
+        my $r = $self->_imap_uid_move($conn, $uid, $dest_folder);
+        die "IMAP MOVE command failed\n" unless $r;
+
+        # MOVE doesn't change which mailbox is SELECTed (RFC 6851), but the
+        # source folder's message count just changed -- rather than
+        # tracking that incrementally, drop the cached selection entirely
+        # so the next _imap_select call gets a fresh, correct EXISTS.
+        if (defined $conn->{selected_mailbox} && $conn->{selected_mailbox} eq $folder) {
+            delete $conn->{selected_mailbox};
+            delete $conn->{selected_exists};
+        }
+        return { new_uid => $r->{new_uid} };
+    });
+    return { error => $err } if $err;
+    # uid is the message's UID in its NEW folder, which is generally NOT
+    # the same number as the UID it had in the source folder (UIDs are
+    # per-mailbox) -- callers must use this value, not the one they
+    # passed in, for any follow-up operation on the moved message.
+    return {
+        success       => 1,
+        uid           => defined $result->{new_uid} ? $result->{new_uid} + 0 : undef,
+        previous_uid  => $uid + 0,
+        folder        => $dest_folder,
+    };
+}
+
+# Soft delete: moves a message to whatever folder is marked \Trash. Never
+# guesses a folder name -- see _resolve_trash_folder.
+sub delete_message {
+    my ($self, $email, $jwt, $folder, $uid) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder or uid' } unless $folder && $uid;
+
+    my ($trash, $terr) = $self->_resolve_trash_folder($email, $jwt);
+    return { error => $terr } if $terr;
+    return { error => 'Message is already in Trash' } if $folder eq $trash;
+
+    my $result = $self->move_message($email, $jwt, $folder, $uid, $trash);
+    return $result if $result->{error};
+    return { success => 1, uid => $result->{uid}, trash_folder => $trash };
+}
+
+# Hard delete -- permanent, irreversible. Deliberately takes NO $folder
+# argument anywhere in its signature: it resolves and selects Trash
+# itself, so a caller (buggy or malicious) cannot redirect it at a live
+# mailbox. Requires the UID to already be found *inside* the resolved
+# Trash folder specifically (a UID that's alive elsewhere under the same
+# number fails closed as "not found"). Uses UID EXPUNGE (UIDPLUS) so only
+# this one message is ever removed, never a bare mailbox-wide EXPUNGE.
+sub expunge_message {
+    my ($self, $email, $jwt, $uid) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing uid' } unless $uid;
+
+    my ($trash, $terr) = $self->_resolve_trash_folder($email, $jwt);
+    return { error => $terr } if $terr;
+
+    my ($result, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $sel = $self->_imap_select($conn, $trash);
+        die $sel->{error} if $sel->{error};
+
+        my $existing = $self->_imap_uid_fetch($conn, $uid, 'FLAGS');
+        die "IMAP FETCH command failed\n" unless $existing;
+        die "Message not found in Trash: UID $uid\n" unless %$existing;
+
+        my $r = $self->_imap_uid_store($conn, $uid, '+FLAGS', ['\\Deleted']);
+        die "IMAP STORE command failed\n" unless $r;
+
+        $r = $self->_imap_uid_expunge($conn, $uid);
+        die "IMAP UID EXPUNGE command failed\n" unless $r;
+
+        delete $conn->{selected_mailbox};
+        delete $conn->{selected_exists};
+        return 1;
+    });
+    return { error => $err } if $err;
+    return { success => 1, uid => $uid + 0, trash_folder => $trash };
+}
+
+# Resolves "the" Trash folder via list_folders' special_use data. Fails
+# closed -- errors clearly if zero or more than one folder is marked
+# \Trash, rather than guessing a name like "Trash": a wrong guess could
+# silently misfile mail, or worse, point a later hard-delete at the wrong
+# folder. Not cached across calls: one extra cheap LIST per delete/expunge
+# beats risking a stale folder name after a rename.
+sub _resolve_trash_folder {
+    my ($self, $email, $jwt) = @_;
+    my $result = $self->list_folders($email, $jwt);
+    return (undef, $result->{error}) if $result->{error};
+    my @trash = grep {
+        grep { /^\\Trash$/i } @{ $_->{special_use} || [] }
+    } @{ $result->{folders} || [] };
+    return (undef, 'No folder marked \\Trash found on this account') unless @trash;
+    return (undef, 'Multiple folders marked \\Trash found on this account') if @trash > 1;
+    return ($trash[0]{name}, undef);
+}
+
+sub create_folder {
+    my ($self, $email, $jwt, $name) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder name' } unless defined $name && length $name;
+
+    my (undef, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $r = $self->_imap_create($conn, $name);
+        die "Folder already exists: $name\n" if ref $r eq 'HASH' && $r->{exists};
+        die "IMAP CREATE command failed\n" unless $r;
+        return 1;
+    });
+    return { error => $err } if $err;
+    return { success => 1, folder => $name };
+}
+
+# Refuses to rename INBOX or any folder carrying a special-use flag
+# (Trash/Sent/Drafts/Archive/Junk) -- see _is_protected_folder, which
+# fails CLOSED (refuses the operation) if it can't even verify safety.
+sub rename_folder {
+    my ($self, $email, $jwt, $name, $new_name) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder name or new name' }
+        unless defined $name && length $name && defined $new_name && length $new_name;
+
+    my ($protected, $perr) = $self->_is_protected_folder($email, $jwt, $name);
+    return { error => $perr } if $perr;
+    return { error => 'Cannot rename a special-use folder' } if $protected;
+
+    my (undef, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $r = $self->_imap_rename($conn, $name, $new_name);
+        die "Folder not found: $name\n" if ref $r eq 'HASH' && $r->{not_found};
+        die "IMAP RENAME command failed\n" unless $r;
+        if (defined $conn->{selected_mailbox} && $conn->{selected_mailbox} eq $name) {
+            delete $conn->{selected_mailbox};
+            delete $conn->{selected_exists};
+        }
+        return 1;
+    });
+    return { error => $err } if $err;
+    return { success => 1, folder => $new_name };
+}
+
+sub delete_folder {
+    my ($self, $email, $jwt, $name) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    return { error => 'Missing folder name' } unless defined $name && length $name;
+
+    my ($protected, $perr) = $self->_is_protected_folder($email, $jwt, $name);
+    return { error => $perr } if $perr;
+    return { error => 'Cannot delete a special-use folder' } if $protected;
+
+    my (undef, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $r = $self->_imap_delete_mailbox($conn, $name);
+        die "Folder not found: $name\n" if ref $r eq 'HASH' && $r->{not_found};
+        die "IMAP DELETE command failed\n" unless $r;
+        if (defined $conn->{selected_mailbox} && $conn->{selected_mailbox} eq $name) {
+            delete $conn->{selected_mailbox};
+            delete $conn->{selected_exists};
+        }
+        return 1;
+    });
+    return { error => $err } if $err;
+    return { success => 1, folder => $name };
+}
+
+# Fails CLOSED: if the list_folders call this depends on itself errors,
+# returns an error (refusing the caller's rename/delete) rather than
+# silently treating "couldn't check" as "not protected" -- a transient
+# LIST failure must never be the reason a special-use folder gets
+# renamed/deleted out from under an account.
+sub _is_protected_folder {
+    my ($self, $email, $jwt, $name) = @_;
+    return (1, undef) if uc($name) eq 'INBOX';
+    my $result = $self->list_folders($email, $jwt);
+    return (undef, $result->{error}) if $result->{error};
+    my ($f) = grep { $_->{name} eq $name } @{ $result->{folders} || [] };
+    return (($f && @{ $f->{special_use} || [] }) ? 1 : 0, undef);
 }
 
 # --- Connection pool ----------------------------------------------------
@@ -545,6 +845,224 @@ sub _imap_uid_fetch_body_part {
     });
     return undef if $err;
     return $result;
+}
+
+# Same as _imap_fetch_headers but against an explicit UID set (comma-
+# joined, e.g. "12,45,99") rather than a sequence-number range -- used by
+# search_messages, where the interesting messages are scattered UIDs, not
+# a contiguous range.
+sub _imap_uid_fetch_headers {
+    my ($self, $conn, $uid_set) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID FETCH $uid_set (UID FLAGS ENVELOPE RFC822.SIZE)");
+        my @messages;
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp) {
+            if ($resp =~ /^\*\s+\d+\s+FETCH\s+\((.*)\)\s*$/is) {
+                my $items = _imap_parse_fetch_items($1);
+                my $env   = _envelope_to_hash($items->{ENVELOPE});
+                push @messages, {
+                    uid     => ($items->{UID} // 0) + 0,
+                    flags   => $items->{FLAGS} || [],
+                    subject => $env->{subject},
+                    from    => $env->{from},
+                    date    => $env->{date},
+                    size    => ($items->{'RFC822.SIZE'} // 0) + 0,
+                };
+            }
+            last if $resp =~ /^\Q$tag\E\s/;
+            $resp = _imap_read_response_line($conn);
+        }
+        die "FETCH failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return \@messages;
+    });
+    return undef if $err;
+    return $result;
+}
+
+sub _imap_uid_search {
+    my ($self, $conn, $search_str) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID SEARCH $search_str");
+        my @uids;
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp) {
+            if ($resp =~ /^\*\s+SEARCH\s*(.*)$/i) {
+                @uids = split /\s+/, $1 if length $1;
+            }
+            last if $resp =~ /^\Q$tag\E\s/;
+            $resp = _imap_read_response_line($conn);
+        }
+        die "SEARCH failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return [ map { $_ + 0 } @uids ];
+    });
+    return undef if $err;
+    return $result;
+}
+
+# $op is '+FLAGS' or '-FLAGS'. .SILENT suppresses the untagged FETCH reply
+# (callers re-fetch FLAGS explicitly afterward for a guaranteed-fresh
+# value rather than trusting/parsing this response).
+sub _imap_uid_store {
+    my ($self, $conn, $uid, $op, $flags) = @_;
+    my $flags_str = '(' . join(' ', @$flags) . ')';
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID STORE $uid $op.SILENT $flags_str");
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        die "STORE failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+# UIDs are per-mailbox, not global -- a message moved into another folder
+# gets a NEW UID there, which is NOT the same number as its source UID
+# (they can coincidentally match, especially in an empty destination
+# folder, but that's not guaranteed by the protocol). Since UIDPLUS is
+# confirmed available, a successful MOVE's response includes an untagged
+# "OK [COPYUID <uidvalidity> <source-uids> <dest-uids>]" line -- parse
+# that to learn the real new UID rather than assuming it's unchanged.
+# Returns {new_uid => N} on success (new_uid is undef if the server
+# didn't include COPYUID for some reason -- callers should treat that as
+# "unknown, re-list the destination folder to find it").
+sub _imap_uid_move {
+    my ($self, $conn, $uid, $dest_folder) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID MOVE $uid " . _imap_quote($dest_folder));
+        my $new_uid;
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp) {
+            if ($resp =~ /^\*\s+OK\s+\[COPYUID\s+\S+\s+\S+\s+(\S+)\]/i) {
+                ($new_uid) = $1 =~ /^(\d+)/; # dest-uidset for one message is one number
+            }
+            last if $resp =~ /^\Q$tag\E\s/;
+            $resp = _imap_read_response_line($conn);
+        }
+        die "Destination folder not found: $dest_folder\n"
+            if defined $resp && $resp =~ /^\Q$tag\E\s+NO/i;
+        die "MOVE failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return { new_uid => $new_uid };
+    });
+    return undef if $err;
+    return $result;
+}
+
+# UIDPLUS's targeted expunge -- removes only $uid, never a bare mailbox-
+# wide EXPUNGE that would remove every \Deleted-flagged message.
+sub _imap_uid_expunge {
+    my ($self, $conn, $uid) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID EXPUNGE $uid");
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        die "UID EXPUNGE failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+sub _imap_create {
+    my ($self, $conn, $name) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag CREATE " . _imap_quote($name));
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        return { exists => 1 } if defined $resp && $resp =~ /^\Q$tag\E\s+NO/i;
+        die "CREATE failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+sub _imap_rename {
+    my ($self, $conn, $name, $new_name) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag RENAME " . _imap_quote($name) . ' ' . _imap_quote($new_name));
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        return { not_found => 1 } if defined $resp && $resp =~ /^\Q$tag\E\s+NO/i;
+        die "RENAME failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+sub _imap_delete_mailbox {
+    my ($self, $conn, $name) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag DELETE " . _imap_quote($name));
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        return { not_found => 1 } if defined $resp && $resp =~ /^\Q$tag\E\s+NO/i;
+        die "DELETE failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+# Builds one IMAP SEARCH criteria string from a plain-hash request. Every
+# string value goes through _imap_quote -- never interpolated raw, which
+# is what would otherwise open an IMAP command-injection vector (e.g. a
+# subject of `foo" BODY "bar` smuggling in extra search terms). Dies with
+# a plain, caller-facing message (no trailing IMAP jargon) on invalid
+# input; the caller catches this and maps it to 400. No raw sequence/UID-
+# range passthrough is exposed -- this is a semantic search, not a raw
+# SEARCH-command passthrough.
+sub _build_search_criteria {
+    my ($criteria) = @_;
+    my @parts;
+
+    die "Cannot specify both unseen and seen\n" if $criteria->{unseen} && $criteria->{seen};
+    die "Cannot specify both flagged and unflagged\n" if $criteria->{flagged} && $criteria->{unflagged};
+
+    push @parts, 'UNSEEN'    if $criteria->{unseen};
+    push @parts, 'SEEN'      if $criteria->{seen};
+    push @parts, 'FLAGGED'   if $criteria->{flagged};
+    push @parts, 'UNFLAGGED' if $criteria->{unflagged};
+
+    for my $key (qw(from to subject body)) {
+        my $val = $criteria->{$key};
+        next unless defined $val && length $val;
+        push @parts, uc($key) . ' ' . _imap_quote($val);
+    }
+
+    for my $pair (['since', 'SINCE'], ['before', 'BEFORE']) {
+        my ($key, $imap_word) = @$pair;
+        my $val = $criteria->{$key};
+        next unless defined $val && length $val;
+        die "Invalid date for '$key' (expected YYYY-MM-DD): $val\n"
+            unless $val =~ /^(\d{4})-(\d{2})-(\d{2})$/;
+        my ($y, $mon, $d) = ($1, $2, $3);
+        my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+        my $mon_name = $months[$mon - 1] or die "Invalid date for '$key': $val\n";
+        push @parts, "$imap_word $d-$mon_name-$y";
+    }
+
+    return @parts ? join(' ', @parts) : 'ALL';
 }
 
 # --- ENVELOPE / BODYSTRUCTURE parsing -------------------------------------

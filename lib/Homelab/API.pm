@@ -718,6 +718,148 @@ $m->get('/messages/:uid/part' => sub ($c) {
     return $c->render(data => $result->{data});
 });
 
+# --- Phase 3: mutating mail routes -----------------------------------------
+# Everything above only ever reads (via .PEEK); these can change a live
+# mailbox. See Homelab::Mail's Phase 3 methods for the safety design
+# (esp. expunge_message, which is deliberately impossible to point at a
+# live folder from here or anywhere else in the call chain).
+
+$m->get('/search' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my %criteria;
+    for my $k (qw(from to subject body since before)) {
+        my $v = $c->param($k);
+        $criteria{$k} = $v if defined $v && length $v;
+    }
+    for my $k (qw(unseen seen flagged unflagged)) {
+        $criteria{$k} = 1 if $c->param($k);
+    }
+    $criteria{limit} = $c->param('limit') if defined $c->param('limit');
+    my $result = $mail->search_messages($email, $jwt, $folder, \%criteria);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} =~ /^Folder not found/            ? 404
+                : $result->{error} =~ /^(?:Invalid|Cannot specify)/    ? 400
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+$m->post('/messages/:uid/flags' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my $uid    = $c->stash('uid');
+    my $json   = $c->req->json // {};
+    my $result = $mail->set_flags($email, $jwt, $folder, $uid, $json->{add}, $json->{remove});
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} =~ /^(?:Invalid flag|Must specify)/ ? 400
+                : $result->{error} =~ /^(?:Folder|Message) not found/  ? 404
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+$m->post('/messages/:uid/move' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $json   = $c->req->json // {};
+    my $folder = $json->{folder};
+    my $uid    = $c->stash('uid');
+    my $dest   = $json->{to};
+    my $result = $mail->move_message($email, $jwt, $folder, $uid, $dest);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} eq 'Source and destination folder are the same' ? 400
+                : $result->{error} =~ /^(?:Folder|Destination folder|Message) not found/ ? 404
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+# Soft delete -- moves to whatever folder is marked \Trash. Recoverable.
+$m->delete('/messages/:uid' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my $uid    = $c->stash('uid');
+    my $result = $mail->delete_message($email, $jwt, $folder, $uid);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} eq 'Message is already in Trash'      ? 400
+                : $result->{error} =~ /^(?:Folder|Message) not found/    ? 404
+                : 502; # includes "No/Multiple folder(s) marked \Trash ..."
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+# Hard delete -- permanent, irreversible, Trash-only. Deliberately no
+# `folder` param anywhere on this route: a caller cannot redirect it at a
+# live mailbox even by supplying one, since Homelab::Mail::expunge_message
+# doesn't accept one either.
+$m->delete('/messages/:uid/permanent' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $uid    = $c->stash('uid');
+    my $result = $mail->expunge_message($email, $jwt, $uid);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} =~ /^Message not found in Trash/ ? 404
+                : 502; # includes "No/Multiple folder(s) marked \Trash ..."
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+$m->post('/folders' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $json   = $c->req->json // {};
+    my $result = $mail->create_folder($email, $jwt, $json->{name});
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} eq 'Missing folder name'    ? 400
+                : $result->{error} =~ /^Folder already exists/ ? 400
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+# Not a path segment (`PATCH /folders/:name`) since folder names can
+# contain "/" or other IMAP hierarchy delimiters -- same rationale as
+# `part` being a query param instead of a path segment above.
+$m->patch('/folders' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $json   = $c->req->json // {};
+    my $result = $mail->rename_folder($email, $jwt, $json->{name}, $json->{to});
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} eq 'Cannot rename a special-use folder' ? 403
+                : $result->{error} =~ /^Folder not found/                  ? 404
+                : $result->{error} =~ /^Missing/                           ? 400
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+$m->delete('/folders' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $name   = $c->param('name');
+    my $result = $mail->delete_folder($email, $jwt, $name);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} eq 'Cannot delete a special-use folder' ? 403
+                : $result->{error} =~ /^Folder not found/                  ? 404
+                : $result->{error} eq 'Missing folder name'                ? 400
+                : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
 # Admin routes — hardcoded to require the site_admin role, independent of
 # the dynamic api.role_permissions table (so a bad table edit can never
 # lock every admin out with no recovery path).

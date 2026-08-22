@@ -45,8 +45,8 @@ storage:
 # is no separate IMAP password to configure here.
 mail:
   imap:
-    host: imap.mailmasker.org
-    port: 993
+    host: imap.mailmasker.org   # REQUIRED — no default; the app fails to start without this
+    port: 993                  # REQUIRED — no default
     connect_timeout: 10   # seconds for the TCP+TLS+SASL handshake
     command_timeout: 15   # seconds per IMAP command round-trip
   pool:
