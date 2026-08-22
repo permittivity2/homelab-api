@@ -318,6 +318,38 @@ def cmd_mail_status(args):
     return _print_response(_request(args, "GET", "/api/v1/mail/status"))
 
 
+def cmd_mail_folders(args):
+    return _print_response(_request(args, "GET", "/api/v1/mail/folders"))
+
+
+def cmd_mail_messages(args):
+    params = {"folder": args.folder}
+    if args.offset is not None:
+        params["offset"] = args.offset
+    if args.limit is not None:
+        params["limit"] = args.limit
+    return _print_response(_request(args, "GET", "/api/v1/mail/messages", params=params))
+
+
+def cmd_mail_message(args):
+    params = {"folder": args.folder}
+    return _print_response(_request(args, "GET", f"/api/v1/mail/messages/{args.uid}", params=params))
+
+
+def cmd_mail_part(args):
+    session = get_session_or_die()
+    api_url = resolve_api_url(args)
+    params = {"folder": args.folder, "part": args.part}
+    resp = requests.get(
+        f"{api_url}/api/v1/mail/messages/{args.uid}/part",
+        headers={"Authorization": f"Bearer {session['token']}"},
+        params=params,
+        timeout=None,
+        stream=True,
+    )
+    return _save_binary_response(resp, args.output, f"part-{args.uid}-{args.part}.bin")
+
+
 # ---------------------------------------------------------------------------
 # Drive - public share handlers (no auth)
 # ---------------------------------------------------------------------------
@@ -653,6 +685,28 @@ def build_parser():
     # --- Mail (IMAP) ---
     mail = add_group("mail", "Mail (IMAP) operations.")
     mail("status", cmd_mail_status, "Show INBOX unseen/total message counts.")
+
+    mail("folders", cmd_mail_folders, "List mail folders/mailboxes.")
+
+    p = mail("messages", cmd_mail_messages, "List messages in a folder (paginated, newest first).")
+    p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
+    p.add_argument("--offset", type=int, help="Pagination offset (message count). Default: 0.")
+    p.add_argument("--limit", type=int, help="Max messages to return (max 200). Default: 50.")
+
+    p = mail("message", cmd_mail_message, "Show one message's headers and MIME part list (no content).")
+    p.add_argument("uid", help="Message UID.")
+    p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
+
+    p = mail(
+        "part", cmd_mail_part, "Download one message part's decoded content by part number.",
+        description="Downloads one MIME part's decoded content, whether it's a text/plain "
+                     "body, a text/html body, or a binary attachment -- same command either "
+                     "way. Use 'mail message' first to see a message's available part numbers.",
+    )
+    p.add_argument("uid", help="Message UID.")
+    p.add_argument("part", help="Part number (e.g. '1' or '1.2'), as shown by 'mail message'.")
+    p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
+    p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
 
     # --- Drive (file/directory/share operations) ---
     drive = add_group("drive", "Drive file/directory/share operations.")

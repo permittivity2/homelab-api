@@ -15,7 +15,7 @@
 # "59" for upload-file's own positional file argument).
 _homelab_cli_value_flags="--email --set-api-url --path --dir-id --startat \
 --parent-id --version --output --to-path --name --share-with --permission \
---current-dir-id --endpoint --role --file-ids --dir-ids"
+--current-dir-id --endpoint --role --file-ids --dir-ids --folder --offset --limit"
 
 _homelab_cli_is_value_flag() {
     local flag="$1" f
@@ -39,7 +39,7 @@ _homelab_cli_filecomplete() {
 _homelab_cli_top_commands="login logout configure validate introspect refresh health mail drive admin"
 _homelab_cli_group_names="mail drive admin"
 
-_homelab_cli_mail_subcommands="status"
+_homelab_cli_mail_subcommands="status folders messages message part"
 
 _homelab_cli_drive_subcommands="share-meta share-dir share-download quota \
 file-info upload-file file-meta download-file trash-file move-file \
@@ -155,6 +155,9 @@ _homelab_cli_completions() {
         "drive create-zip") opts="--file-ids --dir-ids --dir-id" ;;
         "admin grant-permission"|"admin revoke-permission") opts="--endpoint" ;;
         "admin grant-role") opts="--role" ;;
+        "mail messages") opts="--folder --offset --limit" ;;
+        "mail message") opts="--folder" ;;
+        "mail part") opts="--folder --output" ;;
         *) opts="" ;;
     esac
 

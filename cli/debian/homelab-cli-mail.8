@@ -14,10 +14,49 @@ groups mail/IMAP-related REST calls under one command family. These talk
 to the mail server as the logged-in account \- no separate mail password
 is ever needed, since homelab-api authenticates to Dovecot using the same
 JWT this CLI already holds.
+.P
+A message's content is exposed as a flat list of MIME parts (see
+.BR message ")"
+\- there is no single "body" field, since a message may have a
+plain-text part, an HTML part, an encrypted payload, or something else
+entirely, and it isn't this tool's job to guess which one to show. Use
+.B part
+to fetch any specific part's actual content by its part number.
 .SH COMMANDS
 .TP
 .B status
 Show the current INBOX unseen and total message counts.
+.TP
+.B folders
+List mail folders/mailboxes, including special-use flags (\\Sent,
+\\Trash, \\Drafts, \\Archive, \\Junk) when the server reports them.
+.TP
+.BI messages " [--folder NAME] [--offset N] [--limit N]"
+List messages in a folder, newest first, headers only (UID, flags,
+subject, from, date, size).
+.I --folder
+defaults to INBOX;
+.I --limit
+defaults to 50 and is capped at 200. Pagination is computed from the
+folder's message count at request time, not a stable cursor \- a page can
+shift slightly if mail arrives or is expunged between two calls.
+.TP
+.BI message " UID [--folder NAME]"
+Show one message's headers (date, subject, from, to, cc, message-id) and
+its flat list of MIME parts (part number, content-type, charset,
+filename, size, disposition) \- no part content is included. Use
+.B part
+to download a specific part's actual content.
+.TP
+.BI part " UID PART [--folder NAME] [--output PATH]"
+Download one MIME part's decoded content by its part number (e.g.
+.RI \(lq 1 \(rq
+or
+.RI \(lq 1.2 \(rq,
+as shown by
+.BR message ")."
+Works the same way whether that part is a plain-text body, an HTML body,
+or a binary attachment.
 .SH SEE ALSO
 .BR homelab-cli (8),
 .BR homelab-cli-drive (8),

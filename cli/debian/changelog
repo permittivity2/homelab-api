@@ -1,3 +1,14 @@
+homelab-cli (0.2.2) unstable; urgency=medium
+
+  * Add `mail folders`, `mail messages`, `mail message`, and `mail part`
+    commands, wrapping the new GET /api/v1/mail/{folders,messages,
+    messages/:uid,messages/:uid/part} endpoints. A message's content is
+    exposed as a flat list of MIME parts (no single "body" field) --
+    `mail part` fetches any specific part's content by number, text or
+    binary alike. Updated homelab-cli-mail(8).
+
+ -- Gardner <gardner@homelab>  Fri, 21 Aug 2026 19:15:00 -0500
+
 homelab-cli (0.2.1) unstable; urgency=medium
 
   * Release v0.2.1
