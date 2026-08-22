@@ -12,6 +12,7 @@ require Test::Mojo;
 require IO::Socket::SSL;
 require MIME::Base64;
 require YAML::XS;
+require JSON::PP;
 
 my $t = Test::Mojo->new('Homelab::API');
 
@@ -297,6 +298,116 @@ subtest 'mail trash (soft) then purge (hard, Trash-only) the synthetic message' 
     # Confirm it's actually gone.
     $t->get_ok("/api/v1/mail/messages/$synthetic_uid?folder=$trash_folder", { Authorization => "Bearer $token" })
         ->status_is(404);
+};
+
+# --- Phase 4: send/draft/allowed-senders -----------------------------------
+# Every send/draft test below targets ONLY the operator's own already-
+# authorized test mailbox as both From and To -- this is the highest-risk
+# phase so far (a bug here could reach a real SMTP MAIL FROM/RCPT TO), so
+# nothing here is allowed to touch a third-party address.
+
+my $ALLOWED_SUBJECT = "[homelab-api test send] $$ " . time();
+my $DRAFT_SUBJECT   = "[homelab-api test draft] $$ " . time();
+
+subtest 'mail allowed-from' => sub {
+    $t->get_ok('/api/v1/mail/allowed-senders', { Authorization => "Bearer $token" })
+        ->status_is(200)->json_is('/success', 1);
+
+    my $allowed = $t->tx->res->json;
+    ok(ref $allowed->{addresses} eq 'ARRAY', 'addresses is an array');
+    ok(ref $allowed->{domains} eq 'ARRAY', 'domains is an array');
+
+    my $is_authorized =
+        (grep { lc($_) eq lc($TEST_EMAIL) } @{ $allowed->{addresses} })
+        || do {
+            my ($domain) = $TEST_EMAIL =~ /\@(.+)$/;
+            grep { lc($_) eq '@' . lc($domain) } @{ $allowed->{domains} };
+        };
+    plan skip_all => "test account $TEST_EMAIL has no allowed sender entry; send/draft tests need one"
+        unless $is_authorized;
+};
+
+subtest 'mail send (self-mailbox only)' => sub {
+    $t->post_ok('/api/v1/mail/send', { Authorization => "Bearer $token" },
+        form => {
+            message => JSON::PP::encode_json({
+                from => $TEST_EMAIL, to => [$TEST_EMAIL],
+                subject => $ALLOWED_SUBJECT, text_body => 'Phase 4 self-send test. Safe to delete.',
+            }),
+        })
+        ->status_is(200)->json_is('/success', 1);
+    ok($t->tx->res->json->{message_id}, 'send reports a message_id');
+
+    # Give delivery a moment, then confirm it actually landed in INBOX.
+    my $found;
+    for (1 .. 10) {
+        $t->get_ok("/api/v1/mail/search?folder=INBOX&subject=" . _url_encode($ALLOWED_SUBJECT),
+            { Authorization => "Bearer $token" })
+            ->status_is(200);
+        $found = $t->tx->res->json->{messages};
+        last if $found && @$found;
+        sleep 1;
+    }
+    ok($found && @$found, 'sent message landed in INBOX') or return;
+    my $inbox_uid = $found->[0]{uid};
+
+    # Confirm a Sent-folder copy was also filed (best-effort, but should
+    # succeed against a real, correctly-configured account).
+    my ($folders_res) = $t->get_ok('/api/v1/mail/folders', { Authorization => "Bearer $token" })
+        ->tx->res->json;
+    my ($sent_folder) = grep { grep { /^\\Sent$/i } @{ $_->{special_use} || [] } } @{ $folders_res->{folders} };
+  SKIP: {
+        skip 'no \\Sent folder on this account', 2 unless $sent_folder;
+        $t->get_ok("/api/v1/mail/search?folder=$sent_folder->{name}&subject=" . _url_encode($ALLOWED_SUBJECT),
+            { Authorization => "Bearer $token" })
+            ->status_is(200);
+        my $sent_hits = $t->tx->res->json->{messages};
+        ok($sent_hits && @$sent_hits, 'Sent-copy landed in the Sent folder');
+        if ($sent_hits && @$sent_hits) {
+            $t->delete_ok("/api/v1/mail/messages/$sent_hits->[0]{uid}?folder=$sent_folder->{name}",
+                { Authorization => "Bearer $token" });
+        }
+    }
+
+    # Clean up the INBOX copy.
+    $t->delete_ok("/api/v1/mail/messages/$inbox_uid?folder=INBOX", { Authorization => "Bearer $token" })
+        ->status_is(200);
+};
+
+subtest 'mail send: unauthorized From is rejected before anything else' => sub {
+    $t->post_ok('/api/v1/mail/send', { Authorization => "Bearer $token" },
+        form => {
+            message => JSON::PP::encode_json({
+                from => 'definitely-not-authorized@example-unauthorized-domain.invalid',
+                to => [$TEST_EMAIL], subject => 'should never send', text_body => 'x',
+            }),
+        })
+        ->status_is(403);
+    is($t->tx->res->json->{error}, 'From address not authorized', 'exact refusal reason returned');
+};
+
+subtest 'mail draft (self-mailbox only)' => sub {
+    $t->post_ok('/api/v1/mail/drafts', { Authorization => "Bearer $token" },
+        form => {
+            message => JSON::PP::encode_json({
+                from => $TEST_EMAIL, subject => $DRAFT_SUBJECT,
+                text_body => 'Phase 4 draft test. Safe to delete.',
+            }),
+        })
+        ->status_is(200)->json_is('/success', 1);
+    my $draft = $t->tx->res->json;
+    ok($draft->{message_id}, 'draft reports a message_id');
+    my $draft_folder = $draft->{folder};
+    ok($draft_folder, 'draft reports the resolved Drafts folder');
+
+    $t->get_ok("/api/v1/mail/search?folder=$draft_folder&subject=" . _url_encode($DRAFT_SUBJECT),
+        { Authorization => "Bearer $token" })
+        ->status_is(200);
+    my $hits = $t->tx->res->json->{messages};
+    ok($hits && @$hits, 'draft landed in Drafts') or return;
+
+    $t->delete_ok("/api/v1/mail/messages/$hits->[0]{uid}?folder=$draft_folder",
+        { Authorization => "Bearer $token" });
 };
 
 # Runs unconditionally regardless of whether earlier subtests found

@@ -1,6 +1,7 @@
 package Homelab::API;
 
 use Mojolicious::Lite -signatures;
+use Mojo::JSON qw(decode_json);
 use Homelab::Database;
 use Homelab::Auth;
 use Homelab::RateLimit;
@@ -858,6 +859,102 @@ $m->delete('/folders' => sub ($c) {
                 : 502;
     }
     return _set_json_response($c, $result, $status);
+});
+
+# --- Phase 4: send/draft/allowed-senders ------------------------------------
+# multipart/form-data (not base64-in-JSON) since local attachments are
+# binary -- mirrors the existing Drive upload precedent (`POST
+# /drive/files`) rather than inventing a second binary-upload convention.
+# Both /send and /drafts take a `message` form field (JSON string) plus
+# zero or more repeated `attach` file fields.
+
+# Resolves both kinds of attachment (`attach` file uploads and
+# `drive_attachment_ids` references) into the flat
+# [{filename,content_type,bytes}, ...] list Homelab::Mail expects. Returns
+# (\@attachments, undef, undef) on success or (undef, $error, $status) on
+# the first failure -- a bad attachment fails the whole request rather
+# than silently sending a partial message.
+sub _mail_build_attachments {
+    my ($c, $email, $message) = @_;
+    my @attachments;
+
+    for my $upload (@{ $c->req->every_upload('attach') // [] }) {
+        push @attachments, {
+            filename     => $upload->filename,
+            content_type => $upload->headers->content_type || 'application/octet-stream',
+            bytes        => $upload->slurp,
+        };
+    }
+
+    for my $id (@{ $message->{drive_attachment_ids} || [] }) {
+        my ($kind, $file) = $drive->resolve_attachment_id($email, $id);
+        return (undef, "Drive attachment not found: $id", 404) unless $kind;
+        return (undef, "Attaching an entire Drive directory is not yet implemented (id: $id)", 400)
+            if $kind eq 'directory';
+
+        my $dl = $drive->download($email, $id);
+        return (undef, $dl->{error}, 404) if $dl->{error};
+
+        open my $fh, '<:raw', $dl->{disk_path}
+            or return (undef, "Failed to read Drive attachment: $id", 502);
+        local $/;
+        my $bytes = <$fh>;
+        close $fh;
+
+        push @attachments, {
+            filename     => $dl->{file_name},
+            content_type => $dl->{mime_type} || 'application/octet-stream',
+            bytes        => $bytes,
+        };
+    }
+
+    return (\@attachments, undef, undef);
+}
+
+$m->post('/send' => sub ($c) {
+    my $email   = $c->stash('user_email');
+    my $jwt     = $c->stash('user_jwt');
+    my $message = eval { decode_json($c->param('message') // '{}') };
+    return _set_json_response($c, { success => 0, error => 'Invalid message JSON' }, 400) if $@;
+
+    my ($attachments, $err, $status) = _mail_build_attachments($c, $email, $message);
+    return _set_json_response($c, { success => 0, error => $err }, $status) unless $attachments;
+    $message->{attachments} = $attachments;
+
+    my $result = $mail->send_message($email, $jwt, $message);
+    my $resp_status = 200;
+    if ($result->{error}) {
+        $resp_status = $result->{error} eq 'From address not authorized'                  ? 403
+                     : $result->{error} =~ /^(?:Missing|Invalid|Message exceeds maximum)/  ? 400
+                     : 502;
+    }
+    return _set_json_response($c, $result, $resp_status);
+});
+
+$m->post('/drafts' => sub ($c) {
+    my $email   = $c->stash('user_email');
+    my $jwt     = $c->stash('user_jwt');
+    my $message = eval { decode_json($c->param('message') // '{}') };
+    return _set_json_response($c, { success => 0, error => 'Invalid message JSON' }, 400) if $@;
+
+    my ($attachments, $err, $status) = _mail_build_attachments($c, $email, $message);
+    return _set_json_response($c, { success => 0, error => $err }, $status) unless $attachments;
+    $message->{attachments} = $attachments;
+
+    my $result = $mail->save_draft($email, $jwt, $message);
+    my $resp_status = 200;
+    if ($result->{error}) {
+        $resp_status = $result->{error} eq 'From address not authorized'                  ? 403
+                     : $result->{error} =~ /^(?:Missing|Invalid|Message exceeds maximum)/  ? 400
+                     : 502;
+    }
+    return _set_json_response($c, $result, $resp_status);
+});
+
+$m->get('/allowed-senders' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $result = $mail->list_allowed_senders($email);
+    return _set_json_response($c, $result, $result->{error} ? 502 : 200);
 });
 
 # Admin routes — hardcoded to require the site_admin role, independent of
