@@ -8,6 +8,7 @@ use MIME::QuotedPrint qw(decode_qp);
 use Encode qw();
 use Encode::MIME::Header;
 use DateTime;
+use Crypt::URandom qw(urandom);
 
 # Phase 1/2 of issue #015: talks to Dovecot directly over IMAP, using the
 # caller's own homelab-api JWT as the IMAP credential via a hand-rolled
@@ -30,6 +31,17 @@ use DateTime;
 # part's raw decoded bytes by its part number, uniformly whether that part
 # is text/plain, text/html, or a binary attachment. Deciding what to
 # render is the caller's job.
+#
+# Phase 4 adds outbound mail: send_message/save_draft construct a MIME
+# message and either transmit it over SMTP (hand-rolled AUTH OAUTHBEARER/
+# XOAUTH2 over IO::Socket::SSL, same low-dependency style as IMAP --
+# confirmed working against production in
+# script/experiments/smtp-oauthbearer-poc.pl, see issue_tracking's
+# Progress notes) or APPEND it to the Drafts folder. list_allowed_senders
+# is a pure DB read (no IMAP/SMTP) surfacing which From addresses/domains
+# Postfix's own sender-login-map already authorizes the caller to use --
+# this module is not re-implementing that enforcement, only displaying it,
+# and independently re-checks it before ever opening an SMTP connection.
 
 sub new {
     my ($class, $db, $config) = @_;
@@ -46,6 +58,14 @@ sub new {
     my $port = $imap_cfg->{port}
         or die "Homelab::Mail: mail.imap.port is required in config.yml\n";
 
+    # Same rule for SMTP (Phase 4): no default -- which mail server this
+    # sends outbound through is just as environment-specific as IMAP.
+    my $smtp_cfg  = $mail_cfg->{smtp} // {};
+    my $smtp_host = $smtp_cfg->{host}
+        or die "Homelab::Mail: mail.smtp.host is required in config.yml\n";
+    my $smtp_port = $smtp_cfg->{port}
+        or die "Homelab::Mail: mail.smtp.port is required in config.yml\n";
+
     my $self = {
         db   => $db,
         imap => {
@@ -54,6 +74,14 @@ sub new {
             connect_timeout => $imap_cfg->{connect_timeout} // 10,
             command_timeout => $imap_cfg->{command_timeout} // 15,
         },
+        smtp => {
+            host            => $smtp_host,
+            port            => $smtp_port,
+            connect_timeout => $smtp_cfg->{connect_timeout} // 10,
+            command_timeout => $smtp_cfg->{command_timeout} // 15,
+            data_timeout    => $smtp_cfg->{data_timeout} // 30,
+        },
+        max_message_size_mb => $mail_cfg->{max_message_size_mb} // 25,
         pool_max_size     => $pool_cfg->{max_size} // 200,
         pool_idle_timeout => $pool_cfg->{idle_timeout} // 300,
         pool_max_lifetime => $pool_cfg->{max_lifetime} // 3300,
@@ -214,6 +242,355 @@ sub get_part {
     });
     return { error => $err } if $err;
     return $result;
+}
+
+# Phase 4: outbound mail. send_message/save_draft share MIME-construction
+# logic (_build_mime_message et al, below) and never guess/pick anything
+# on the caller's behalf -- the From address is independently re-verified
+# against list_allowed_senders before any SMTP connection opens, and
+# recipients/attachments are exactly what the caller specified.
+
+# Lists which From addresses/domains the caller is authorized to send as,
+# per dovecot.allowed_sender_addresses (a view already encoding Postfix's
+# full smtpd_sender_login_maps authorization logic). Pure DB read, no
+# IMAP/SMTP involved. This is advisory/display data for the caller --
+# Postfix remains the actual enforcement point at send time, and
+# _from_address_authorized independently re-checks this same data before
+# _build_mime_message will ever let a message proceed to SMTP.
+sub list_allowed_senders {
+    my ($self, $email) = @_;
+    return { error => 'Missing email' } unless $email;
+    my $rows = eval {
+        $self->{db}->query_rows(
+            'SELECT sender_address FROM dovecot.allowed_sender_addresses WHERE sasl_username = ?',
+            $email
+        );
+    };
+    return { error => 'Failed to query allowed sender addresses' } if $@ || !defined $rows;
+
+    my (@addresses, @domains);
+    for my $r (@$rows) {
+        my $addr = $r->{sender_address};
+        next unless defined $addr;
+        if ($addr =~ /^%\@(.+)$/) {
+            push @domains, "\@$1";
+        } else {
+            push @addresses, $addr;
+        }
+    }
+    return { success => 1, addresses => \@addresses, domains => \@domains };
+}
+
+# Fails CLOSED: if list_allowed_senders itself errors (DB problem), this
+# returns false -- never "assume authorized." Called from
+# _build_mime_message, strictly before any SMTP socket is opened, so a
+# rejected From address never reaches the wire at all.
+sub _from_address_authorized {
+    my ($self, $email, $from) = @_;
+    my $allowed = $self->list_allowed_senders($email);
+    return 0 if $allowed->{error};
+    my ($from_addr) = $from =~ /<([^>]+)>/ ? ($1) : ($from);
+    return 1 if grep { lc($_) eq lc($from_addr) } @{ $allowed->{addresses} };
+    my ($domain) = $from_addr =~ /\@(.+)$/;
+    return 0 unless $domain;
+    return 1 if grep { lc($_) eq '@' . lc($domain) } @{ $allowed->{domains} };
+    return 0;
+}
+
+# Sends a composed message over SMTP (hand-rolled AUTH OAUTHBEARER, falling
+# back to AUTH XOAUTH2 -- both confirmed working against production, see
+# script/experiments/smtp-oauthbearer-poc.pl and issue_tracking's Progress
+# notes; OAUTHBEARER succeeded on the very first attempt there). $message:
+# {from, to=>[...], cc=>[...], bcc=>[...], subject, text_body, html_body,
+#  in_reply_to=>{folder,uid} | "<raw Message-ID>", attachments=>[{filename,
+#  content_type, bytes}, ...]}. No SMTP connection pool (see
+# _with_smtp_connection) -- sending is comparatively rare and stateless
+# per transaction, unlike IMAP's frequently-polled, SELECT-stateful use.
+sub send_message {
+    my ($self, $email, $jwt, $message) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    $message = {} unless ref $message eq 'HASH';
+
+    if ($message->{in_reply_to}) {
+        my ($msg_id, $refs) = eval { $self->_resolve_reply_headers($email, $jwt, $message->{in_reply_to}) };
+        if ($@) { (my $m = $@) =~ s/\n$//; return { error => $m }; }
+        $message->{in_reply_to_message_id} = $msg_id;
+        $message->{references} = $refs;
+    }
+
+    my ($raw, $message_id) = eval { $self->_build_mime_message($email, $message) };
+    if ($@) { (my $m = $@) =~ s/\n$//; return { error => $m }; }
+
+    my @rcpts = (@{ $message->{to} || [] }, @{ $message->{cc} || [] }, @{ $message->{bcc} || [] });
+    return { error => 'No recipients' } unless @rcpts;
+
+    my ($ok, $smtp_err) = $self->_with_smtp_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my ($mf_code) = $self->_smtp_command($conn, "MAIL FROM:<$message->{from}>");
+        die "From address rejected by mail server\n" unless defined $mf_code && $mf_code eq '250';
+        for my $rcpt (@rcpts) {
+            my ($rc_code) = $self->_smtp_command($conn, "RCPT TO:<$rcpt>");
+            die "Recipient rejected by mail server: $rcpt\n" unless defined $rc_code && $rc_code eq '250';
+        }
+        my $r = $self->_smtp_send_data($conn, $raw);
+        die "SMTP DATA command failed\n" unless $r;
+        return 1;
+    });
+    return { error => $smtp_err } if $smtp_err;
+
+    # Best-effort Sent-copy filing. The message has already irreversibly
+    # left via SMTP at this point -- failing the whole call over a
+    # missing/ambiguous Sent folder would misleadingly suggest the send
+    # itself failed, risking a well-meaning caller retry that double-sends
+    # the same email to a real recipient. Report as a warning instead.
+    my ($sent_folder, $serr) = $self->_resolve_special_folder($email, $jwt, '\Sent');
+    my $warning;
+    if ($serr) {
+        $warning = "Message sent, but could not file a Sent copy: $serr";
+    } else {
+        my (undef, $aerr) = $self->_with_connection($email, $jwt, sub {
+            my ($conn) = @_;
+            my $r = $self->_imap_append($conn, $sent_folder, $raw, ['\Seen']);
+            die "IMAP APPEND to Sent failed\n" unless $r;
+            return 1;
+        });
+        $warning = "Message sent, but could not file a Sent copy: $aerr" if $aerr;
+    }
+
+    return { success => 1, message_id => $message_id, ($warning ? (warning => $warning) : ()) };
+}
+
+# Builds the identical MIME message send_message would, but APPENDs it to
+# the resolved Drafts folder instead of transmitting -- a draft may be
+# incomplete (no recipients yet), but the From-authorization check still
+# applies (a draft is still "authored as" someone).
+sub save_draft {
+    my ($self, $email, $jwt, $message) = @_;
+    return { error => 'Missing email or token' } unless $email && $jwt;
+    $message = {} unless ref $message eq 'HASH';
+    $message->{draft} = 1;
+
+    if ($message->{in_reply_to}) {
+        my ($msg_id, $refs) = eval { $self->_resolve_reply_headers($email, $jwt, $message->{in_reply_to}) };
+        if ($@) { (my $m = $@) =~ s/\n$//; return { error => $m }; }
+        $message->{in_reply_to_message_id} = $msg_id;
+        $message->{references} = $refs;
+    }
+
+    my ($raw, $message_id) = eval { $self->_build_mime_message($email, $message) };
+    if ($@) { (my $m = $@) =~ s/\n$//; return { error => $m }; }
+
+    my ($draft_folder, $derr) = $self->_resolve_special_folder($email, $jwt, '\Drafts');
+    return { error => $derr } if $derr;
+
+    my (undef, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $r = $self->_imap_append($conn, $draft_folder, $raw, ['\Draft']);
+        die "IMAP APPEND to Drafts failed\n" unless $r;
+        return 1;
+    });
+    return { error => $err } if $err;
+    return { success => 1, message_id => $message_id, folder => $draft_folder };
+}
+
+# Resolves in_reply_to into (in_reply_to_message_id, references). Accepts
+# either a raw Message-ID string (caller already has it) or {folder, uid}
+# (resolved here via the existing get_message, plus one extra targeted
+# fetch for References since IMAP ENVELOPE's 10 fixed fields don't include
+# it -- confirmed: _envelope_to_hash has no references key).
+sub _resolve_reply_headers {
+    my ($self, $email, $jwt, $in_reply_to) = @_;
+    return (undef, undef) unless $in_reply_to;
+
+    if (!ref $in_reply_to) {
+        return ($in_reply_to, undef);
+    }
+
+    my ($folder, $uid) = @{$in_reply_to}{qw(folder uid)};
+    die "Missing folder or uid for in_reply_to\n" unless $folder && $uid;
+
+    my $orig = $self->get_message($email, $jwt, $folder, $uid);
+    die "$orig->{error}\n" if $orig->{error};
+    my $orig_msg_id = $orig->{headers}{message_id};
+    die "Original message has no Message-ID to reply to\n" unless $orig_msg_id;
+
+    my ($orig_references, $err) = $self->_with_connection($email, $jwt, sub {
+        my ($conn) = @_;
+        my $sel = $self->_imap_select($conn, $folder);
+        die $sel->{error} if $sel->{error};
+        return $self->_imap_uid_fetch_references($conn, $uid) // '';
+    });
+    $orig_references = undef if $err || !length($orig_references // '');
+
+    my $references = $orig_references ? "$orig_references $orig_msg_id" : $orig_msg_id;
+    return ($orig_msg_id, $references);
+}
+
+# --- MIME message construction ------------------------------------------
+#
+# No CPAN MIME-building library is used here -- same low-dependency
+# philosophy as the hand-rolled IMAP/SMTP wire protocol code elsewhere in
+# this module. Text/HTML bodies are always base64-encoded (not quoted-
+# printable) for simplicity and to sidestep QP line-length edge cases,
+# matching how attachments are already encoded.
+
+sub _build_mime_message {
+    my ($self, $email, $message) = @_;
+
+    my $from = $message->{from};
+    die "Missing From address\n" unless defined $from && length $from;
+    die "Invalid From address: $from\n" unless _validate_address($from);
+    die "From address not authorized\n" unless $self->_from_address_authorized($email, $from);
+
+    my @to  = @{ $message->{to}  || [] };
+    my @cc  = @{ $message->{cc}  || [] };
+    my @bcc = @{ $message->{bcc} || [] };
+    die "Missing To recipients\n" unless @to || $message->{draft};
+    for my $addr (@to, @cc, @bcc) {
+        die "Invalid recipient address: $addr\n" unless _validate_address($addr);
+    }
+
+    my $subject = $message->{subject};
+    die "Missing subject\n" unless defined $subject || $message->{draft};
+    $subject //= '';
+
+    my $has_text = defined $message->{text_body} && length $message->{text_body};
+    my $has_html = defined $message->{html_body} && length $message->{html_body};
+    die "Message must have a text or HTML body\n"
+        unless $has_text || $has_html || $message->{draft};
+
+    my $message_id = $self->_generate_message_id;
+    my @headers;
+    push @headers, _fold_header('Message-ID', $message_id);
+    push @headers, _fold_header('Date', _rfc5322_date());
+    push @headers, _fold_header('From', $from);
+    push @headers, _fold_header('To', join(', ', @to)) if @to;
+    push @headers, _fold_header('Cc', join(', ', @cc)) if @cc;
+    # Bcc is deliberately never written into the message headers (RFC 5322
+    # convention) -- it's used only for the SMTP envelope recipient list.
+    push @headers, _fold_header('Subject', _encode_header_value($subject));
+    push @headers, _fold_header('In-Reply-To', $message->{in_reply_to_message_id})
+        if $message->{in_reply_to_message_id};
+    push @headers, _fold_header('References', $message->{references})
+        if $message->{references};
+    push @headers, "MIME-Version: 1.0\r\n";
+
+    my ($content_type, $transfer_encoding, $body) = $self->_build_multipart_body(
+        $message->{text_body}, $message->{html_body}, $message->{attachments} || []
+    );
+    push @headers, _fold_header('Content-Type', $content_type);
+    push @headers, "Content-Transfer-Encoding: $transfer_encoding\r\n" if defined $transfer_encoding;
+
+    my $raw = join('', @headers) . "\r\n" . $body;
+
+    my $max_bytes = $self->{max_message_size_mb} * 1024 * 1024;
+    die "Message exceeds maximum size of $self->{max_message_size_mb}MB\n"
+        if length($raw) > $max_bytes;
+
+    return ($raw, $message_id);
+}
+
+sub _validate_address {
+    my ($addr) = @_;
+    return defined $addr && $addr =~ /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+}
+
+sub _generate_message_id {
+    my ($self) = @_;
+    my $rand = unpack('H*', urandom(16));
+    my $host = $self->{smtp}{host} || 'localhost';
+    return "<$rand\@$host>";
+}
+
+sub _rfc5322_date {
+    return DateTime->now(time_zone => 'local')->strftime('%a, %d %b %Y %H:%M:%S %z');
+}
+
+sub _encode_header_value {
+    my ($str) = @_;
+    return '' unless defined $str;
+    return $str if $str =~ /^[\x20-\x7E]*$/; # pure ASCII, no encoding needed
+    return Encode::encode('MIME-Header', $str);
+}
+
+# Simple RFC 5322 header folding at ~78 columns -- breaks on the last
+# space before the column limit, continuation lines prefixed with a
+# single space.
+sub _fold_header {
+    my ($name, $value) = @_;
+    my $line = "$name: $value";
+    return "$line\r\n" if length($line) <= 78;
+    my @out;
+    while (length($line) > 78) {
+        my $break = rindex($line, ' ', 78);
+        $break = 78 if $break < 1;
+        push @out, substr($line, 0, $break);
+        $line = ' ' . substr($line, $break + 1);
+    }
+    push @out, $line;
+    return join("\r\n", @out) . "\r\n";
+}
+
+sub _mime_boundary {
+    return 'homelab-' . unpack('H*', urandom(12));
+}
+
+# One MIME part's headers + base64 body (NOT including the leading
+# "--boundary" line -- callers add that when assembling a multipart body).
+sub _mime_leaf {
+    my (%opts) = @_;
+    my @header_lines = ("Content-Type: $opts{content_type}");
+    if ($opts{filename}) {
+        push @header_lines, sprintf('Content-Disposition: %s; filename="%s"',
+            $opts{disposition} || 'attachment', _encode_header_value($opts{filename}));
+    }
+    push @header_lines, 'Content-Transfer-Encoding: base64';
+    my $b64 = encode_base64($opts{bytes} // '', "\r\n");
+    return join("\r\n", @header_lines) . "\r\n\r\n" . $b64;
+}
+
+# Returns ($content_type, $transfer_encoding, $body). $transfer_encoding
+# is defined only for a single-part (non-multipart) body -- multipart
+# bodies encode each part's own Content-Transfer-Encoding individually
+# and have no top-level one (so the caller shouldn't emit that header).
+sub _build_multipart_body {
+    my ($self, $text_body, $html_body, $attachments) = @_;
+    my $has_text = defined $text_body && length $text_body;
+    my $has_html = defined $html_body && length $html_body;
+    $attachments = [] unless ref $attachments eq 'ARRAY';
+
+    my ($inner_ct, $inner_te, $inner_body);
+    if ($has_text && $has_html) {
+        my $b = _mime_boundary();
+        my $part1 = _mime_leaf(content_type => 'text/plain; charset=UTF-8', bytes => $text_body);
+        my $part2 = _mime_leaf(content_type => 'text/html; charset=UTF-8', bytes => $html_body);
+        $inner_body = "--$b\r\n$part1\r\n--$b\r\n$part2\r\n--$b--\r\n";
+        $inner_ct = qq{multipart/alternative; boundary="$b"};
+        $inner_te = undef;
+    } else {
+        my $bytes = $has_html ? $html_body : ($text_body // '');
+        $inner_ct = $has_html ? 'text/html; charset=UTF-8' : 'text/plain; charset=UTF-8';
+        $inner_te = 'base64';
+        $inner_body = encode_base64($bytes, "\r\n");
+    }
+
+    return ($inner_ct, $inner_te, $inner_body) unless @$attachments;
+
+    my $b = _mime_boundary();
+    my @parts;
+    push @parts, defined $inner_te
+        ? "Content-Type: $inner_ct\r\nContent-Transfer-Encoding: $inner_te\r\n\r\n$inner_body"
+        : "Content-Type: $inner_ct\r\n\r\n$inner_body";
+    for my $att (@$attachments) {
+        push @parts, _mime_leaf(
+            content_type => $att->{content_type} || 'application/octet-stream',
+            bytes        => $att->{bytes},
+            filename     => $att->{filename},
+            disposition  => 'attachment',
+        );
+    }
+    my $mixed_body = join('', map { "--$b\r\n$_\r\n" } @parts) . "--$b--\r\n";
+    return (qq{multipart/mixed; boundary="$b"}, undef, $mixed_body);
 }
 
 # Phase 3: mutating operations. Everything above this point only ever uses
@@ -407,22 +784,28 @@ sub expunge_message {
     return { success => 1, uid => $uid + 0, trash_folder => $trash };
 }
 
-# Resolves "the" Trash folder via list_folders' special_use data. Fails
-# closed -- errors clearly if zero or more than one folder is marked
-# \Trash, rather than guessing a name like "Trash": a wrong guess could
-# silently misfile mail, or worse, point a later hard-delete at the wrong
-# folder. Not cached across calls: one extra cheap LIST per delete/expunge
+# Resolves "the" folder carrying a given \SpecialUse flag (\Trash, \Sent,
+# \Drafts, ...) via list_folders' special_use data. Fails closed -- errors
+# clearly if zero or more than one folder carries the flag, rather than
+# guessing a name like "Trash"/"Sent": a wrong guess could silently
+# misfile mail, or worse, point a hard-delete or a Sent/Drafts copy at the
+# wrong folder. Not cached across calls: one extra cheap LIST per call
 # beats risking a stale folder name after a rename.
-sub _resolve_trash_folder {
-    my ($self, $email, $jwt) = @_;
+sub _resolve_special_folder {
+    my ($self, $email, $jwt, $use) = @_;
     my $result = $self->list_folders($email, $jwt);
     return (undef, $result->{error}) if $result->{error};
-    my @trash = grep {
-        grep { /^\\Trash$/i } @{ $_->{special_use} || [] }
+    my @matches = grep {
+        grep { /^\Q$use\E$/i } @{ $_->{special_use} || [] }
     } @{ $result->{folders} || [] };
-    return (undef, 'No folder marked \\Trash found on this account') unless @trash;
-    return (undef, 'Multiple folders marked \\Trash found on this account') if @trash > 1;
-    return ($trash[0]{name}, undef);
+    return (undef, "No folder marked $use found on this account") unless @matches;
+    return (undef, "Multiple folders marked $use found on this account") if @matches > 1;
+    return ($matches[0]{name}, undef);
+}
+
+sub _resolve_trash_folder {
+    my ($self, $email, $jwt) = @_;
+    return $self->_resolve_special_folder($email, $jwt, '\Trash');
 }
 
 sub create_folder {
@@ -973,6 +1356,66 @@ sub _imap_uid_expunge {
     return $result;
 }
 
+# Real APPEND (Phase 4), usable outside tests -- save_draft appends a
+# drafted message, send_message appends a Sent copy after a successful
+# SMTP transaction. Runs inside an existing pooled $conn from
+# _with_connection, exactly like every other _imap_* helper here (t/mail.t
+# has its own separate test-only APPEND that hand-rolls its own AUTH from
+# scratch for test isolation -- that one stays as-is).
+sub _imap_append {
+    my ($self, $conn, $folder, $raw_message, $flags) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout} + 15, sub {
+        my $tag = _imap_next_tag($conn);
+        my $flag_str = (@{ $flags || [] }) ? '(' . join(' ', @$flags) . ') ' : '';
+        my $n = length($raw_message);
+        _imap_send($conn, "$tag APPEND " . _imap_quote($folder) . " $flag_str\{$n}");
+        my $cont = _imap_read_response_line($conn);
+        die "APPEND not accepted\n" unless defined $cont && $cont =~ /^\+/;
+        $conn->{sock}->print($raw_message);
+        $conn->{sock}->print("\r\n");
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp && $resp !~ /^\Q$tag\E\s/) {
+            $resp = _imap_read_response_line($conn);
+        }
+        die "Folder not found: $folder\n" if defined $resp && $resp =~ /^\Q$tag\E\s+NO/i;
+        die "APPEND failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+# Fetches just the raw References header text for one message -- needed
+# for reply threading since IMAP ENVELOPE's 10 fixed fields don't include
+# it. Uses a direct regex scan for "BODY[...]" rather than the generic
+# _imap_parse_fetch_items tokenizer, since HEADER.FIELDS (REFERENCES)'s
+# own internal parens/space would confuse that tokenizer's atom-stops-at-
+# paren rule (which is correct for BODY[1]-style plain part numbers, but
+# not for this item name shape).
+sub _imap_uid_fetch_references {
+    my ($self, $conn, $uid) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
+        my $tag = _imap_next_tag($conn);
+        _imap_send($conn, "$tag UID FETCH $uid (BODY.PEEK[HEADER.FIELDS (REFERENCES)])");
+        my $text;
+        my $resp = _imap_read_response_line($conn);
+        while (defined $resp) {
+            if ($resp =~ /BODY\[[^\]]*\]\s*(\x00LIT\x00\d+\x00.*)/is) {
+                ($text) = _imap_parse_token($1, 0);
+            }
+            last if $resp =~ /^\Q$tag\E\s/;
+            $resp = _imap_read_response_line($conn);
+        }
+        die "UID FETCH failed\n" unless defined $resp && $resp =~ /^\Q$tag\E OK/i;
+        return $text;
+    });
+    return undef if $err;
+    return undef unless defined $result;
+    $result =~ s/^References:\s*//i;
+    $result =~ s/\s+$//;
+    return length($result) ? $result : undef;
+}
+
 sub _imap_create {
     my ($self, $conn, $name) = @_;
     my ($result, $err) = $self->_with_timeout($self->{imap}{command_timeout}, sub {
@@ -1063,6 +1506,157 @@ sub _build_search_criteria {
     }
 
     return @parts ? join(' ', @parts) : 'ALL';
+}
+
+# --- SMTP wire protocol ----------------------------------------------------
+#
+# Hand-rolled over IO::Socket::SSL, same low-dependency philosophy as the
+# IMAP wire protocol above -- no Net::SMTP/Authen::SASL dependency added.
+# Confirmed working against production (mail.mailmasker.org:465, implicit
+# TLS, AUTH OAUTHBEARER succeeding on the first attempt) via
+# script/experiments/smtp-oauthbearer-poc.pl; see issue_tracking's
+# Progress notes. Unlike IMAP, there is deliberately NO connection pool --
+# sending is comparatively rare and stateless per transaction (no long-
+# lived SELECT-style state worth preserving), so _with_smtp_connection
+# just connects fresh, runs one transaction, and always tears down,
+# retrying the whole thing once on failure using the CURRENT request's JWT.
+
+sub _with_smtp_connection {
+    my ($self, $email, $jwt, $code) = @_;
+    my $conn = $self->_smtp_connect($email, $jwt);
+    return (undef, $conn->{error}) if $conn->{error};
+
+    my $result = eval { $code->($conn) };
+    my $err = $@;
+    $self->_smtp_quit($conn);
+
+    if (!$result) {
+        $conn = $self->_smtp_connect($email, $jwt);
+        return (undef, $conn->{error}) if $conn->{error};
+        $result = eval { $code->($conn) };
+        $err = $@;
+        $self->_smtp_quit($conn);
+        return (undef, $err || 'SMTP command failed') unless $result;
+    }
+    return ($result, undef);
+}
+
+# RFC 5321 multi-line framing: "250-foo\r\n250-bar\r\n250 baz\r\n" -- a
+# dash after the code means more lines follow, a space means the last
+# line. Completely different shape from IMAP's tag-based scheme; SMTP has
+# no tags at all. Returns ($code, \@lines).
+sub _smtp_read_response {
+    my ($conn) = @_;
+    my (@lines, $code);
+    while (1) {
+        my $line = $conn->{sock}->getline;
+        return (undef, \@lines) unless defined $line;
+        $line =~ s/\r?\n\z//;
+        push @lines, $line;
+        if ($line =~ /^(\d{3})([ -])/) {
+            $code = $1;
+            last if $2 eq ' ';
+        } else {
+            last;
+        }
+    }
+    return ($code, \@lines);
+}
+
+sub _smtp_send {
+    my ($conn, $line) = @_;
+    $conn->{sock}->print("$line\r\n");
+}
+
+sub _smtp_command {
+    my ($self, $conn, $line) = @_;
+    _smtp_send($conn, $line);
+    return _smtp_read_response($conn);
+}
+
+sub _smtp_connect {
+    my ($self, $email, $jwt) = @_;
+    my ($conn, $err) = $self->_with_timeout($self->{smtp}{connect_timeout}, sub {
+        my $sock = IO::Socket::SSL->new(
+            PeerHost => $self->{smtp}{host},
+            PeerPort => $self->{smtp}{port},
+        ) or die "connect to $self->{smtp}{host}:$self->{smtp}{port} failed: "
+            . IO::Socket::SSL::errstr() . "\n";
+        my $c = { sock => $sock };
+
+        my ($greet_code) = _smtp_read_response($c);
+        die "SMTP greeting failed\n" unless defined $greet_code && $greet_code eq '220';
+
+        _smtp_send($c, 'EHLO homelab-api');
+        my ($ehlo_code, $ehlo_lines) = _smtp_read_response($c);
+        die "EHLO failed\n" unless defined $ehlo_code && $ehlo_code eq '250';
+
+        my ($auth_line) = grep { /^\d{3}[ -]AUTH\b/i } @$ehlo_lines;
+        my @mechs;
+        push @mechs, 'OAUTHBEARER' if $auth_line && $auth_line =~ /\bOAUTHBEARER\b/i;
+        push @mechs, 'XOAUTH2'     if $auth_line && $auth_line =~ /\bXOAUTH2\b/i;
+        die "Server does not advertise OAUTHBEARER or XOAUTH2\n" unless @mechs;
+
+        my $authed;
+        for my $mech (@mechs) {
+            my $sasl = $mech eq 'OAUTHBEARER'
+                ? "n,a=$email,\x01host=$self->{smtp}{host}\x01port=$self->{smtp}{port}\x01auth=Bearer $jwt\x01\x01"
+                : "user=$email\x01auth=Bearer $jwt\x01\x01";
+            _smtp_send($c, "AUTH $mech " . encode_base64($sasl, ''));
+            my ($code) = _smtp_read_response($c);
+            if (defined $code && $code eq '334') {
+                # SASL continuation -- for a failed attempt this is a
+                # base64 JSON error blob (RFC 7628 3.2.3); an empty line
+                # completes the failed exchange.
+                _smtp_send($c, '');
+                ($code) = _smtp_read_response($c);
+            }
+            if (defined $code && $code eq '235') {
+                $authed = $mech;
+                last;
+            }
+            # Reset with a fresh EHLO before trying the next mechanism.
+            _smtp_send($c, 'EHLO homelab-api');
+            _smtp_read_response($c);
+        }
+        die "AUTH failed for $email\n" unless $authed;
+        return $c;
+    });
+    return { error => "SMTP auth failed for $email: $err" } if $err;
+    return $conn;
+}
+
+# RFC 5321 4.5.2 dot-stuffing: any line starting with "." gets an extra
+# "." prefix, and the message is terminated with the standard "\r\n.\r\n".
+sub _smtp_send_data {
+    my ($self, $conn, $raw_message) = @_;
+    my ($result, $err) = $self->_with_timeout($self->{smtp}{data_timeout}, sub {
+        my ($data_code) = $self->_smtp_command($conn, 'DATA');
+        die "DATA not accepted\n" unless defined $data_code && $data_code eq '354';
+
+        (my $stuffed = $raw_message) =~ s/^\./../mg;
+        $conn->{sock}->print($stuffed);
+        $conn->{sock}->print("\r\n.\r\n");
+
+        my ($sent_code) = _smtp_read_response($conn);
+        die "Message not accepted after DATA\n" unless defined $sent_code && $sent_code eq '250';
+        return 1;
+    });
+    return undef if $err;
+    return $result;
+}
+
+sub _smtp_quit {
+    my ($self, $conn) = @_;
+    eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm(2);
+        _smtp_send($conn, 'QUIT');
+        _smtp_read_response($conn);
+        alarm(0);
+    };
+    alarm(0);
+    eval { $conn->{sock}->close };
 }
 
 # --- ENVELOPE / BODYSTRUCTURE parsing -------------------------------------

@@ -226,6 +226,27 @@ sub download {
     };
 }
 
+sub resolve_attachment_id {
+    my ($self, $email, $id) = @_;
+
+    my $user_id = $self->_user_id($email);
+    return (undef, undef) unless $user_id;
+
+    my $file = $self->{db}->query_row(
+        'SELECT id FROM api.drive_files WHERE id = ? AND user_id = ?',
+        $id, $user_id
+    );
+    return ('file', $file) if $file;
+
+    my $dir = $self->{db}->query_row(
+        'SELECT id FROM api.drive_directories WHERE id = ? AND user_id = ?',
+        $id, $user_id
+    );
+    return ('directory', undef) if $dir;
+
+    return (undef, undef);
+}
+
 sub list_files {
     my ($self, $email, $dir_id) = @_;
 

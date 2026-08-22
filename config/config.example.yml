@@ -40,15 +40,26 @@ storage:
   max_file_size_mb: 10240             # Per-upload hard limit (10GB)
   max_concurrent_uploads: 4           # Advertised concurrency limit for clients
 
-# Mail API (IMAP) — see issue_tracking/015-dovecot-imap-api.md. Talks to
-# Dovecot as the caller's own JWT (via AUTHENTICATE OAUTHBEARER), so there
-# is no separate IMAP password to configure here.
+# Mail API (IMAP/SMTP) — see issue_tracking/015-dovecot-imap-api.md. Talks
+# to Dovecot/Postfix as the caller's own JWT (via AUTHENTICATE OAUTHBEARER
+# / AUTH OAUTHBEARER), so there is no separate mail password to configure
+# here.
 mail:
   imap:
     host: imap.mailmasker.org   # REQUIRED — no default; the app fails to start without this
     port: 993                  # REQUIRED — no default
     connect_timeout: 10   # seconds for the TCP+TLS+SASL handshake
     command_timeout: 15   # seconds per IMAP command round-trip
+  smtp:
+    host: mail.mailmasker.org   # REQUIRED — no default. Port 465 specifically (generic
+    port: 465                  # REQUIRED — no default. implicit-TLS submission), NOT
+                                 # 10465 (that listener is provisioned/rate-tuned for
+                                 # Roundcube specifically — confirmed via HAProxy config).
+    connect_timeout: 10   # seconds for the TCP+TLS+SASL handshake
+    command_timeout: 15   # seconds per SMTP command round-trip (EHLO/AUTH/MAIL/RCPT)
+    data_timeout: 30      # seconds for the DATA phase (larger due to attachment bodies)
+  max_message_size_mb: 25 # rejects building a message beyond this, checked before
+                           # assembling the MIME body — mirrors storage.max_file_size_mb
   pool:
     max_size: 200          # cached IMAP connections per worker process (not shared across workers)
     idle_timeout: 300      # seconds unused before a pooled connection is evicted
