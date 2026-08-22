@@ -1,3 +1,14 @@
+homelab-cli (0.2.5) unstable; urgency=medium
+
+  * Fix bash completion: --attach-file, --attach-drive, --cc, --bcc,
+    --html, and --in-reply-to were missing from the value-flags list, so
+    tab-completing a value after --attach-file produced nothing instead
+    of local filenames. --attach-file now completes local paths (like
+    --output); --attach-drive correctly offers no completions, since it
+    takes a remote numeric Drive file id.
+
+ -- Gardner <gardner@homelab>  Sat, 22 Aug 2026 12:36:17 -0500
+
 homelab-cli (0.2.4) unstable; urgency=medium
 
   * Add `mail send`, `mail draft`, and `mail allowed-from` commands.
