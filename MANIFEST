@@ -12,6 +12,7 @@ migrations/003-drive-tasks-schema.sql
 migrations/004-sharing-folders.sql
 migrations/006-rbac-schema.sql
 migrations/007-mail-endpoint-permission.sql
+migrations/008-mail-list-fetch-permissions.sql
 
 lib/Homelab/API.pm
 lib/Homelab/Database.pm

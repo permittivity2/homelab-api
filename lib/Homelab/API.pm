@@ -662,6 +662,62 @@ $m->get('/status' => sub ($c) {
     return _set_json_response($c, $result, $result->{error} ? 502 : 200);
 });
 
+$m->get('/folders' => sub ($c) {
+    my $email = $c->stash('user_email');
+    my $jwt   = $c->stash('user_jwt');
+    my $result = $mail->list_folders($email, $jwt);
+    return _set_json_response($c, $result, $result->{error} ? 502 : 200);
+});
+
+$m->get('/messages' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my $result = $mail->list_messages($email, $jwt, $folder, $c->param('offset'), $c->param('limit'));
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} =~ /^Folder not found/ ? 404 : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+$m->get('/messages/:uid' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my $uid    = $c->stash('uid');
+    my $result = $mail->get_message($email, $jwt, $folder, $uid);
+    my $status = 200;
+    if ($result->{error}) {
+        $status = $result->{error} =~ /^(?:Folder|Message) not found/ ? 404 : 502;
+    }
+    return _set_json_response($c, $result, $status);
+});
+
+# `part` is a query param, not a path segment, to sidestep any ambiguity
+# between Mojolicious placeholders and dot-notation part numbers like
+# "1.2", and to stay consistent with folder/offset/limit already being
+# query params on the routes above.
+$m->get('/messages/:uid/part' => sub ($c) {
+    my $email  = $c->stash('user_email');
+    my $jwt    = $c->stash('user_jwt');
+    my $folder = $c->param('folder');
+    my $uid    = $c->stash('uid');
+    my $part   = $c->param('part');
+    my $result = $mail->get_part($email, $jwt, $folder, $uid, $part);
+    if ($result->{error}) {
+        my $status = $result->{error} eq 'Invalid part number' ? 400
+                   : $result->{error} =~ /^(?:Folder|Message|Part) not found/ ? 404
+                   : 502;
+        return _set_json_response($c, { success => 0, error => $result->{error} }, $status);
+    }
+    $c->res->headers->content_type($result->{content_type} || 'application/octet-stream');
+    if ($result->{filename}) {
+        $c->res->headers->content_disposition(qq{attachment; filename="$result->{filename}"});
+    }
+    return $c->render(data => $result->{data});
+});
+
 # Admin routes — hardcoded to require the site_admin role, independent of
 # the dynamic api.role_permissions table (so a bad table edit can never
 # lock every admin out with no recovery path).
