@@ -16,7 +16,8 @@
 _homelab_cli_value_flags="--email --set-api-url --path --dir-id --startat \
 --parent-id --version --output --to-path --name --share-with --permission \
 --current-dir-id --endpoint --role --file-ids --dir-ids --folder --offset --limit \
---from --to --subject --body --since --before --add --remove"
+--from --to --subject --body --since --before --add --remove --cc --bcc --html \
+--attach-file --attach-drive --in-reply-to"
 
 _homelab_cli_is_value_flag() {
     local flag="$1" f
@@ -77,11 +78,13 @@ _homelab_cli_completions() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    # Completing the VALUE of a flag: only --output is a local path.
-    # Every other value-taking flag is a remote id/string with nothing
-    # sensible to complete locally, so return with no suggestions.
+    # Completing the VALUE of a flag: --output and --attach-file are local
+    # paths (--attach-file uploads a local file fresh). Every other
+    # value-taking flag is a remote id/string (--attach-drive is a numeric
+    # Drive file id, not a local path) with nothing sensible to complete
+    # locally, so return with no suggestions.
     if _homelab_cli_is_value_flag "$prev"; then
-        if [[ "$prev" == "--output" ]]; then
+        if [[ "$prev" == "--output" || "$prev" == "--attach-file" ]]; then
             _homelab_cli_filecomplete
         fi
         return 0
