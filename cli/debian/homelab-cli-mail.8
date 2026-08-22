@@ -42,9 +42,11 @@ folder's message count at request time, not a stable cursor \- a page can
 shift slightly if mail arrives or is expunged between two calls.
 .TP
 .BI message " UID [--folder NAME]"
-Show one message's headers (date, subject, from, to, cc, message-id) and
-its flat list of MIME parts (part number, content-type, charset,
-filename, size, disposition) \- no part content is included. Use
+Show one message's headers (date, subject, from, to, cc, message-id), its
+flat list of MIME parts (part number, content-type, charset, filename,
+size, disposition), and the raw, unparsed header block as base64 in
+.I rawheaderb64
+\- no part content is included. Use
 .B part
 to download a specific part's actual content.
 .TP

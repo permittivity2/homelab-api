@@ -84,6 +84,11 @@ subtest 'mail get message and part' => sub {
     ok(ref $msg->{parts} eq 'ARRAY' && @{ $msg->{parts} }, 'parts is a non-empty array');
     ok(exists $msg->{headers}{subject}, 'headers has subject');
 
+    ok(defined $msg->{rawheaderb64} && length $msg->{rawheaderb64}, 'rawheaderb64 present and non-empty');
+    require MIME::Base64;
+    my $decoded = MIME::Base64::decode_base64($msg->{rawheaderb64});
+    like($decoded, qr/^Subject:/im, 'decoded rawheaderb64 looks like a real header block');
+
     my ($text_part) = grep { $_->{content_type} =~ m{^text/} } @{ $msg->{parts} };
     if ($text_part) {
         $t->get_ok("/api/v1/mail/messages/$first_uid/part?folder=INBOX&part=$text_part->{part_number}",

@@ -125,6 +125,15 @@ sub list_messages {
 # headers (from ENVELOPE) and a flat list of every MIME part (from
 # BODYSTRUCTURE), text and binary alike. Fetch a specific part's content
 # via get_part().
+#
+# Also returns the raw, unparsed RFC 5322 header block (everything before
+# the blank line separating headers from body) via BODY.PEEK[HEADER],
+# always base64-encoded in rawheaderb64. Headers are supposed to be 7-bit
+# ASCII per RFC 5322, but plenty of real-world mail is non-compliant and
+# stuffs raw 8-bit bytes into header values instead of properly RFC
+# 2047-encoding them -- base64 sidesteps that entirely (no JSON-encoding
+# risk from an invalid byte sequence, no need to guess a charset), at the
+# small cost of the caller needing to base64-decode it.
 sub get_message {
     my ($self, $email, $jwt, $folder, $uid) = @_;
     return { error => 'Missing email or token' } unless $email && $jwt;
@@ -135,16 +144,19 @@ sub get_message {
         my $sel = $self->_imap_select($conn, $folder);
         die $sel->{error} if $sel->{error};
 
-        my $item = $self->_imap_uid_fetch($conn, $uid, 'FLAGS ENVELOPE BODYSTRUCTURE');
+        my $item = $self->_imap_uid_fetch($conn, $uid, 'FLAGS ENVELOPE BODYSTRUCTURE BODY.PEEK[HEADER]');
         die "IMAP FETCH command failed\n" unless $item;
         die "Message not found: UID $uid\n" unless %$item;
 
+        my $raw_bytes = $item->{'BODY[HEADER]'};
+
         return {
-            success => 1,
-            uid     => $uid + 0,
-            flags   => $item->{FLAGS} || [],
-            headers => _envelope_to_hash($item->{ENVELOPE}),
-            parts   => _bodystructure_to_parts($item->{BODYSTRUCTURE}),
+            success      => 1,
+            uid          => $uid + 0,
+            flags        => $item->{FLAGS} || [],
+            headers      => _envelope_to_hash($item->{ENVELOPE}),
+            rawheaderb64 => defined $raw_bytes ? encode_base64($raw_bytes, '') : undef,
+            parts        => _bodystructure_to_parts($item->{BODYSTRUCTURE}),
         };
     });
     return { error => $err } if $err;
