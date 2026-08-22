@@ -1,3 +1,14 @@
+homelab-cli (0.2.3) unstable; urgency=medium
+
+  * Add `mail search`, `mail flags`, `mail move`, `mail trash`, `mail
+    purge`, and `mail folder-create`/`folder-rename`/`folder-delete`
+    commands, wrapping the new mutating mail endpoints. `trash` moves a
+    message to the account's Trash (recoverable); `purge` permanently
+    deletes a message but only works on one already in Trash and has no
+    --folder option, since it can never target a live mailbox.
+
+ -- Gardner <gardner@homelab>  Sat, 22 Aug 2026 09:00:00 -0500
+
 homelab-cli (0.2.2) unstable; urgency=medium
 
   * Add `mail folders`, `mail messages`, `mail message`, and `mail part`

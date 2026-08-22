@@ -15,7 +15,8 @@
 # "59" for upload-file's own positional file argument).
 _homelab_cli_value_flags="--email --set-api-url --path --dir-id --startat \
 --parent-id --version --output --to-path --name --share-with --permission \
---current-dir-id --endpoint --role --file-ids --dir-ids --folder --offset --limit"
+--current-dir-id --endpoint --role --file-ids --dir-ids --folder --offset --limit \
+--from --to --subject --body --since --before --add --remove"
 
 _homelab_cli_is_value_flag() {
     local flag="$1" f
@@ -39,7 +40,8 @@ _homelab_cli_filecomplete() {
 _homelab_cli_top_commands="login logout configure validate introspect refresh health mail drive admin"
 _homelab_cli_group_names="mail drive admin"
 
-_homelab_cli_mail_subcommands="status folders messages message part"
+_homelab_cli_mail_subcommands="status folders messages message part search \
+flags move trash purge folder-create folder-rename folder-delete"
 
 _homelab_cli_drive_subcommands="share-meta share-dir share-download quota \
 file-info upload-file file-meta download-file trash-file move-file \
@@ -158,6 +160,10 @@ _homelab_cli_completions() {
         "mail messages") opts="--folder --offset --limit" ;;
         "mail message") opts="--folder" ;;
         "mail part") opts="--folder --output" ;;
+        "mail search") opts="--folder --from --to --subject --body --since --before --unseen --seen --flagged --unflagged --limit" ;;
+        "mail flags") opts="--folder --add --remove" ;;
+        "mail move") opts="--folder" ;;
+        "mail trash") opts="--folder" ;;
         *) opts="" ;;
     esac
 

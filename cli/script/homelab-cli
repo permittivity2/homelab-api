@@ -350,6 +350,57 @@ def cmd_mail_part(args):
     return _save_binary_response(resp, args.output, f"part-{args.uid}-{args.part}.bin")
 
 
+def cmd_mail_search(args):
+    params = {"folder": args.folder}
+    for key in ("from_", "to", "subject", "body", "since", "before", "limit"):
+        val = getattr(args, key)
+        if val is not None:
+            params[key.rstrip("_")] = val
+    for flag in ("unseen", "seen", "flagged", "unflagged"):
+        if getattr(args, flag):
+            params[flag] = "1"
+    return _print_response(_request(args, "GET", "/api/v1/mail/search", params=params))
+
+
+def cmd_mail_flags(args):
+    body = {}
+    if args.add:
+        body["add"] = args.add
+    if args.remove:
+        body["remove"] = args.remove
+    params = {"folder": args.folder}
+    return _print_response(_request(
+        args, "POST", f"/api/v1/mail/messages/{args.uid}/flags", params=params, json=body
+    ))
+
+
+def cmd_mail_move(args):
+    body = {"folder": args.folder, "to": args.to}
+    return _print_response(_request(args, "POST", f"/api/v1/mail/messages/{args.uid}/move", json=body))
+
+
+def cmd_mail_trash(args):
+    params = {"folder": args.folder}
+    return _print_response(_request(args, "DELETE", f"/api/v1/mail/messages/{args.uid}", params=params))
+
+
+def cmd_mail_purge(args):
+    return _print_response(_request(args, "DELETE", f"/api/v1/mail/messages/{args.uid}/permanent"))
+
+
+def cmd_mail_folder_create(args):
+    return _print_response(_request(args, "POST", "/api/v1/mail/folders", json={"name": args.name}))
+
+
+def cmd_mail_folder_rename(args):
+    body = {"name": args.name, "to": args.to}
+    return _print_response(_request(args, "PATCH", "/api/v1/mail/folders", json=body))
+
+
+def cmd_mail_folder_delete(args):
+    return _print_response(_request(args, "DELETE", "/api/v1/mail/folders", params={"name": args.name}))
+
+
 # ---------------------------------------------------------------------------
 # Drive - public share handlers (no auth)
 # ---------------------------------------------------------------------------
@@ -707,6 +758,59 @@ def build_parser():
     p.add_argument("part", help="Part number (e.g. '1' or '1.2'), as shown by 'mail message'.")
     p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
     p.add_argument("--output", help="Local path to save to. Default: derived from the response.")
+
+    p = mail("search", cmd_mail_search, "Search messages in a folder by criteria.")
+    p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
+    p.add_argument("--from", dest="from_", metavar="FROM", help="Match From header (substring).")
+    p.add_argument("--to", help="Match To header (substring).")
+    p.add_argument("--subject", help="Match Subject header (substring).")
+    p.add_argument("--body", help="Match message body (substring, server-side).")
+    p.add_argument("--since", help="Only messages on/after this date (YYYY-MM-DD).")
+    p.add_argument("--before", help="Only messages before this date (YYYY-MM-DD).")
+    p.add_argument("--unseen", action="store_true", help="Only unread messages.")
+    p.add_argument("--seen", action="store_true", help="Only read messages.")
+    p.add_argument("--flagged", action="store_true", help="Only flagged messages.")
+    p.add_argument("--unflagged", action="store_true", help="Only unflagged messages.")
+    p.add_argument("--limit", type=int, help="Max results to return (max 200). Default: 50.")
+
+    p = mail("flags", cmd_mail_flags, r"Add or remove flags on a message (e.g. \Seen, \Flagged).")
+    p.add_argument("uid", help="Message UID.")
+    p.add_argument("--folder", default="INBOX", help="Folder name. Default: INBOX.")
+    p.add_argument("--add", action="append", metavar="FLAG", help="Flag to add. Repeatable.")
+    p.add_argument("--remove", action="append", metavar="FLAG", help="Flag to remove. Repeatable.")
+
+    p = mail("move", cmd_mail_move, "Move a message to another folder.")
+    p.add_argument("uid", help="Message UID.")
+    p.add_argument("to", help="Destination folder name.")
+    p.add_argument("--folder", default="INBOX", help="Source folder name. Default: INBOX.")
+
+    p = mail("trash", cmd_mail_trash, "Move a message to the account's Trash folder (recoverable).")
+    p.add_argument("uid", help="Message UID.")
+    p.add_argument("--folder", default="INBOX", help="Source folder name. Default: INBOX.")
+
+    p = mail(
+        "purge", cmd_mail_purge, "Permanently delete a message. Irreversible.",
+        description="Permanently deletes a message. Only works on a message already sitting "
+                     "in the account's Trash folder -- it cannot target a live mailbox, by "
+                     "design, and has no --folder option for that reason. Irreversible.",
+    )
+    p.add_argument("uid", help="Message UID, as it currently exists within the Trash folder.")
+
+    p = mail("folder-create", cmd_mail_folder_create, "Create a new mail folder.")
+    p.add_argument("name", help="New folder name.")
+
+    p = mail(
+        "folder-rename", cmd_mail_folder_rename,
+        "Rename a mail folder. Refuses special-use folders (INBOX, Trash, Sent, etc.).",
+    )
+    p.add_argument("name", help="Current folder name.")
+    p.add_argument("to", help="New folder name.")
+
+    p = mail(
+        "folder-delete", cmd_mail_folder_delete,
+        "Delete a mail folder. Refuses special-use folders (INBOX, Trash, Sent, etc.).",
+    )
+    p.add_argument("name", help="Folder name to delete.")
 
     # --- Drive (file/directory/share operations) ---
     drive = add_group("drive", "Drive file/directory/share operations.")

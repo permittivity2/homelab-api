@@ -59,6 +59,64 @@ as shown by
 .BR message ")."
 Works the same way whether that part is a plain-text body, an HTML body,
 or a binary attachment.
+.TP
+.BI search " [--folder NAME] [criteria...] [--limit N]"
+Search messages in a folder, newest first, same result shape as
+.BR messages "."
+Criteria:
+.BR --from ", " --to ", " --subject ", " --body
+(substring match),
+.BR --since ", " --before
+(date, YYYY-MM-DD),
+.BR --unseen ", " --seen ", " --flagged ", " --unflagged
+(boolean). Multiple criteria are ANDed together.
+.TP
+.BI flags " UID [--folder NAME] [--add FLAG]... [--remove FLAG]..."
+Add or remove flags on a message (e.g.
+.RI \(lq \\eSeen \(rq
+to mark read,
+.RI \(lq \\eFlagged \(rq
+to star it). At least one
+.B --add
+or
+.B --remove
+is required. Returns the message's full flag list after the change.
+.TP
+.BI move " UID TO [--folder NAME]"
+Move a message to another folder.
+.I --folder
+(source) defaults to INBOX.
+.TP
+.BI trash " UID [--folder NAME]"
+Move a message to the account's Trash folder \- the folder marked
+.B \eTrash
+via SPECIAL-USE, resolved automatically, never guessed. Recoverable: the
+message still exists, just relocated. Fails if the account has no folder
+(or more than one) marked
+.BR \eTrash "."
+.TP
+.BI purge " UID"
+Permanently delete a message.
+.B Irreversible.
+Only works on a message already sitting in the account's Trash folder \-
+there is deliberately no
+.B --folder
+option, since this command can never target a live mailbox. Use
+.B trash
+first, then
+.B purge
+the same UID once it's actually in Trash.
+.TP
+.BI folder-create " NAME"
+Create a new mail folder.
+.TP
+.BI folder-rename " NAME TO"
+Rename a mail folder. Refuses INBOX and any folder carrying a
+SPECIAL-USE flag (Trash, Sent, Drafts, Archive, Junk).
+.TP
+.BI folder-delete " NAME"
+Delete a mail folder. Same special-use-folder refusal as
+.BR folder-rename "."
 .SH SEE ALSO
 .BR homelab-cli (8),
 .BR homelab-cli-drive (8),
