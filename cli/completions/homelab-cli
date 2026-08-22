@@ -41,10 +41,11 @@ _homelab_cli_top_commands="login logout configure validate introspect refresh he
 _homelab_cli_group_names="mail drive admin"
 
 _homelab_cli_mail_subcommands="status folders messages message part search \
-flags move trash purge folder-create folder-rename folder-delete"
+flags move trash purge folder-create folder-rename folder-delete \
+allowed-from send draft"
 
 _homelab_cli_drive_subcommands="share-meta share-dir share-download quota \
-file-info upload-file file-meta download-file trash-file move-file \
+file-info list-files upload-file file-meta download-file trash-file move-file \
 copy-file file-versions list-trash restore-file empty-trash trash-dir \
 list-directories create-directory delete-directory update-directory \
 share-file share-directory list-shares list-shares-with-me delete-share \
@@ -143,7 +144,7 @@ _homelab_cli_completions() {
         "login") opts="--email" ;;
         "configure") opts="--set-api-url" ;;
         "drive share-download"|"drive download-file") opts="--output --version" ;;
-        "drive file-info") opts="--path --dir-id --startat --recursive" ;;
+        "drive file-info"|"drive list-files") opts="--path --dir-id --startat --recursive" ;;
         "drive upload-file") opts="--dir-id" ;;
         "drive file-meta") opts="--version" ;;
         "drive move-file"|"drive copy-file") opts="--to-path --dir-id --name" ;;
@@ -164,6 +165,7 @@ _homelab_cli_completions() {
         "mail flags") opts="--folder --add --remove" ;;
         "mail move") opts="--folder" ;;
         "mail trash") opts="--folder" ;;
+        "mail send"|"mail draft") opts="--from --to --cc --bcc --subject --body --html --attach-file --attach-drive --in-reply-to" ;;
         *) opts="" ;;
     esac
 

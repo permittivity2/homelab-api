@@ -117,6 +117,60 @@ SPECIAL-USE flag (Trash, Sent, Drafts, Archive, Junk).
 .BI folder-delete " NAME"
 Delete a mail folder. Same special-use-folder refusal as
 .BR folder-rename "."
+.TP
+.B allowed-from
+List which specific addresses, and which whole domains (wildcard), the
+current account is authorized to send mail as. Purely a display of
+Postfix's own sender-login enforcement \- not itself the enforcement
+point.
+.TP
+.BI send " --from FROM --to TO... --subject SUBJECT [--cc TO]... [--bcc TO]... [--body TEXT] [--html HTML] [--attach-file PATH]... [--attach-drive ID]... [--in-reply-to FOLDER:UID]"
+Compose and send a message via SMTP, then best-effort file a copy into
+the account's Sent folder (a failure to file the Sent copy is reported as
+a
+.I warning
+on an otherwise successful response \- the message has already
+irreversibly been sent, so this never fails the whole call).
+.I --from
+must be an address or domain already listed by
+.BR allowed-from ";"
+an unauthorized
+.I --from
+is rejected before any SMTP connection is even opened.
+.I --to
+,
+.I --cc
+, and
+.I --bcc
+are each repeatable.
+.I --attach-file
+uploads a local file fresh (repeatable);
+.I --attach-drive
+attaches an existing Drive file by its numeric
+.B id
+(as shown by
+.BR homelab-cli-drive (8)'s
+.IR list-files ", not its "
+.IR uuid ";"
+repeatable). Passing a directory id to
+.I --attach-drive
+is rejected \- attaching an entire directory is not yet implemented.
+.I --in-reply-to
+threads this message as a reply to an existing message (sets
+In-Reply-To/References), given as
+.IR FOLDER:UID ,
+e.g.
+.IR INBOX:1234 .
+.TP
+.BI draft " [same flags as send]"
+Builds the same MIME message as
+.B send
+but appends it to the account's Drafts folder instead of transmitting
+it.
+.I --to
+and
+.I --subject
+are optional here, since a draft may be incomplete.
 .SH SEE ALSO
 .BR homelab-cli (8),
 .BR homelab-cli-drive (8),

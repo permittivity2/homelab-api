@@ -401,6 +401,86 @@ def cmd_mail_folder_delete(args):
     return _print_response(_request(args, "DELETE", "/api/v1/mail/folders", params={"name": args.name}))
 
 
+def cmd_mail_allowed_from(args):
+    return _print_response(_request(args, "GET", "/api/v1/mail/allowed-senders"))
+
+
+def _build_mail_message(args):
+    message = {
+        "from": args.from_,
+        "subject": args.subject,
+    }
+    if args.to:
+        message["to"] = args.to
+    if args.cc:
+        message["cc"] = args.cc
+    if args.bcc:
+        message["bcc"] = args.bcc
+    if args.body:
+        message["text_body"] = args.body
+    if args.html:
+        message["html_body"] = args.html
+    if args.attach_drive:
+        message["drive_attachment_ids"] = [int(i) for i in args.attach_drive]
+    if args.in_reply_to:
+        folder, _, uid = args.in_reply_to.partition(":")
+        if not uid:
+            print("--in-reply-to must be in FOLDER:UID form.", file=sys.stderr)
+            sys.exit(1)
+        message["in_reply_to"] = {"folder": folder, "uid": uid}
+    return message
+
+
+def _send_mail_multipart(args, path):
+    session = get_session_or_die()
+    api_url = resolve_api_url(args)
+    url = f"{api_url}{path}"
+    message = _build_mail_message(args)
+
+    def _attempt(bearer_token):
+        file_handles = []
+        try:
+            # MultipartEncoder needs a list of (name, value) tuples, not a
+            # dict, to send multiple fields under the same name ("attach")
+            # -- a real divergence from cmd_upload_file's single-file dict,
+            # since that command never needed more than one "file" field.
+            fields = [("message", json.dumps(message))]
+            for path_ in (args.attach_file or []):
+                fh = open(path_, "rb")
+                file_handles.append(fh)
+                fields.append(("attach", (os.path.basename(path_), fh, "application/octet-stream")))
+            encoder = MultipartEncoder(fields=fields)
+            headers = {
+                "Authorization": f"Bearer {bearer_token}",
+                "Content-Type": encoder.content_type,
+            }
+            return requests.post(url, data=encoder, headers=headers, timeout=None)
+        finally:
+            for fh in file_handles:
+                fh.close()
+
+    # Not routed through the shared _request() wrapper for the same reason
+    # as cmd_upload_file: the encoder wraps consumed-once file streams, so
+    # a 401 retry needs freshly-reopened handles, not a resend of the same
+    # (already-read) body.
+    resp = _attempt(session["token"])
+    if resp.status_code == 401:
+        new_session = _do_refresh(args)
+        if new_session is None:
+            print("Session expired, please run 'homelab-cli login' again.", file=sys.stderr)
+            sys.exit(1)
+        resp = _attempt(new_session["token"])
+    return _print_response(resp)
+
+
+def cmd_mail_send(args):
+    return _send_mail_multipart(args, "/api/v1/mail/send")
+
+
+def cmd_mail_draft(args):
+    return _send_mail_multipart(args, "/api/v1/mail/drafts")
+
+
 # ---------------------------------------------------------------------------
 # Drive - public share handlers (no auth)
 # ---------------------------------------------------------------------------
@@ -812,6 +892,52 @@ def build_parser():
     )
     p.add_argument("name", help="Folder name to delete.")
 
+    mail(
+        "allowed-from", cmd_mail_allowed_from,
+        "List which addresses and domains the current account may send mail as.",
+    )
+
+    def _add_compose_args(p, require_to_subject):
+        p.add_argument("--from", dest="from_", required=True, metavar="FROM", help="From address.")
+        p.add_argument("--to", action="append", required=require_to_subject, help="Recipient. Repeatable.")
+        p.add_argument("--cc", action="append", help="Cc recipient. Repeatable.")
+        p.add_argument("--bcc", action="append", help="Bcc recipient. Repeatable.")
+        p.add_argument("--subject", required=require_to_subject, help="Subject.")
+        p.add_argument("--body", help="Plain-text body.")
+        p.add_argument("--html", help="HTML body.")
+        p.add_argument(
+            "--attach-file", action="append", metavar="PATH",
+            help="Local file to attach (uploaded fresh). Repeatable.",
+        )
+        p.add_argument(
+            "--attach-drive", action="append", metavar="ID",
+            help="Existing Drive file id to attach by reference (no re-upload). "
+                 "Use the numeric file id from 'drive list-files', not its uuid. "
+                 "A directory id is rejected: attaching a whole directory is not "
+                 "yet implemented. Repeatable.",
+        )
+        p.add_argument(
+            "--in-reply-to", metavar="FOLDER:UID",
+            help="Thread this message as a reply to an existing message "
+                 "(sets In-Reply-To/References). Example: INBOX:1234.",
+        )
+
+    p = mail(
+        "send", cmd_mail_send, "Compose and send a message.",
+        description="Composes and sends a message via SMTP, then best-effort files a copy "
+                     "into the account's Sent folder. --from must be an address or domain "
+                     "already returned by 'mail allowed-from'.",
+    )
+    _add_compose_args(p, require_to_subject=True)
+
+    p = mail(
+        "draft", cmd_mail_draft, "Compose and save a draft (does not send).",
+        description="Builds the same MIME message as 'mail send' but appends it to the "
+                     "account's Drafts folder instead of transmitting it. --to/--subject "
+                     "are optional since a draft may be incomplete.",
+    )
+    _add_compose_args(p, require_to_subject=False)
+
     # --- Drive (file/directory/share operations) ---
     drive = add_group("drive", "Drive file/directory/share operations.")
 
@@ -828,6 +954,16 @@ def build_parser():
     drive("quota", cmd_quota, "Show usage/limit/file count for the current user.")
 
     p = drive("file-info", cmd_file_info, "List files by path or directory id.")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--path", help="List files under this path (root-relative).")
+    g.add_argument("--dir-id", help="List files in this directory id.")
+    p.add_argument("--startat", type=int, help="Pagination offset (1000 results/page).")
+    p.add_argument("--recursive", action="store_true", help="Recurse into subdirectories.")
+
+    # Pure alias for file-info (identical handler, identical args) -- added
+    # purely for discoverability, since "file-info" doesn't read as "list
+    # files". No new server-side capability.
+    p = drive("list-files", cmd_file_info, "List files by path or directory id (alias for file-info).")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--path", help="List files under this path (root-relative).")
     g.add_argument("--dir-id", help="List files in this directory id.")

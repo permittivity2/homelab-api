@@ -34,9 +34,24 @@ Download a file via a public share link.
 .B quota
 Show usage/limit/file count for the current user.
 .TP
-.BR file-info ", " file-meta ", " file-versions
+.BR file-info " (alias: " list-files "), " file-meta ", " file-versions
 List files by path or directory id, show lightweight metadata for one
 file, or list all of a file's versions.
+.B list-files
+is a plain alias for
+.B file-info
+with identical arguments \- added for discoverability, since "file-info"
+doesn't read as "list files". Its numeric
+.B id
+column (not the
+.BR uuid )
+is what
+.BR homelab-cli-mail (8)'s
+.B send
+and
+.B draft
+.I --attach-drive
+flag expects.
 .TP
 .BR upload-file ", " download-file
 Upload a local file, or download a file's content.
