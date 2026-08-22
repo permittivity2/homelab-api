@@ -1,3 +1,16 @@
+homelab-cli (0.2.4) unstable; urgency=medium
+
+  * Add `mail send`, `mail draft`, and `mail allowed-from` commands.
+    `send`/`draft` support --to/--cc/--bcc (repeatable), --body/--html,
+    --attach-file (repeatable local upload), --attach-drive (repeatable,
+    numeric Drive file id, no re-upload; a directory id is rejected as
+    not-yet-implemented), and --in-reply-to FOLDER:UID for reply
+    threading.
+  * Add `drive list-files` as a plain alias for `drive file-info` (same
+    handler, same args) for discoverability.
+
+ -- Gardner <gardner@homelab>  Sat, 22 Aug 2026 12:13:42 -0500
+
 homelab-cli (0.2.3) unstable; urgency=medium
 
   * Add `mail search`, `mail flags`, `mail move`, `mail trash`, `mail
