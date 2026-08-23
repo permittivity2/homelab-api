@@ -1,0 +1,11 @@
+homelab-mail-proxy (0.1.0) unstable; urgency=medium
+
+  * Initial release. HAProxy TCP passthrough for the 6 mail-related
+    ports (SMTP/SMTPS/Submission/Roundcube-SMTPS-optional/IMAP/IMAPS),
+    templated backend hosts (may run on a different server than the
+    services it fronts). Config lives entirely in its own conf.d drop-in
+    plus a systemd EXTRAOPTS override -- never edits haproxy.cfg or
+    /etc/default/haproxy, verified empirically not to work reliably on a
+    real HAProxy 3.2.9 install.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 05:00:00 -0500

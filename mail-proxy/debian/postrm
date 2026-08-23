@@ -1,0 +1,38 @@
+#!/bin/sh
+set -e
+
+CONF_D=/etc/haproxy/conf.d
+MARKER="$CONF_D/90-homelab-mail-proxy.cfg"
+DROPIN_DIR=/etc/systemd/system/haproxy.service.d
+DROPIN="$DROPIN_DIR/90-homelab-mail-proxy.conf"
+
+case "$1" in
+    remove)
+        rm -f "$MARKER"
+        rm -f "$DROPIN"
+        rmdir "$DROPIN_DIR" 2>/dev/null || true
+        rmdir "$CONF_D" 2>/dev/null || true
+
+        systemctl daemon-reload 2>/dev/null || true
+        if command -v haproxy >/dev/null 2>&1 && haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null 2>&1; then
+            systemctl reload haproxy 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
