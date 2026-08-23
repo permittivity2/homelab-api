@@ -1,0 +1,81 @@
+Template: homelab-mailsend/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host for the mail lookup tables:
+
+Template: homelab-mailsend/db_port
+Type: string
+Default: 5432
+Description: PostgreSQL port:
+
+Template: homelab-mailsend/db_name
+Type: string
+Default: mailserver
+Description: PostgreSQL database name:
+
+Template: homelab-mailsend/db_user
+Type: string
+Default: dovecot_user
+Description: PostgreSQL role to connect as:
+
+Template: homelab-mailsend/db_password
+Type: password
+Description: PostgreSQL role password:
+
+Template: homelab-mailsend/domains
+Type: string
+Default:
+Description: Mail domains this server handles (space-separated):
+ e.g. "mailmasker.org giraffenow.org". Never assume a single domain.
+
+Template: homelab-mailsend/dovecot_host
+Type: string
+Default: localhost
+Description: Dovecot host (for SASL delegation and LMTP delivery):
+
+Template: homelab-mailsend/dovecot_sasl_mode
+Type: select
+Choices: local, inet
+Default: local
+Description: Dovecot SASL delegation mode:
+ "local" uses a unix socket -- only valid if Dovecot is on this SAME
+ host. "inet" connects to dovecot_host:12345 over the network -- use
+ this for a cross-host homelab-mailread (matching current production
+ topology), and make sure that host's expose_sasl_auth_inet debconf
+ answer is enabled.
+
+Template: homelab-mailsend/dovecot_lmtp_port
+Type: string
+Default: 24
+Description: Dovecot LMTP port (for mail delivery):
+
+Template: homelab-mailsend/enable_roundcube_listener
+Type: boolean
+Default: false
+Description: Add the Roundcube-specific SMTPS listener on port 10465?
+ Disabling this does NOT affect homelab-api's own mail-send feature,
+ which already uses port 465.
+
+Template: homelab-mailsend/behind_proxy
+Type: boolean
+Default: false
+Description: Is this host fronted by HAProxy (PROXY protocol)?
+ Enable only if a homelab-mail-proxy (or equivalent) HAProxy instance
+ terminates PROXY protocol in front of this host's SMTP listeners.
+
+Template: homelab-mailsend/dkim_milter_address
+Type: string
+Default: inet:localhost:8891
+Description: DKIM signer milter address:
+ Defaults to classic OpenDKIM's address, matching production. Point this
+ at a different address (e.g. inet:localhost:10027) if a different DKIM
+ signer is in use. Leave blank to skip DKIM milter wiring entirely.
+
+Template: homelab-mailsend/manage_master_cf_listeners
+Type: boolean
+Default: false
+Description: Add homelab-mailsend's managed submission/smtps listener block to master.cf?
+ Pre-seeded by postinst's own scan of master.cf: left false if an
+ existing submission/smtps listener was already found (the safe default
+ on an already-configured host, avoiding a duplicate-listener outage),
+ true only when postinst found nothing conflicting.

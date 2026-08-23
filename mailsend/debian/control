@@ -1,0 +1,20 @@
+Source: homelab-mailsend
+Section: mail
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-mailsend
+Architecture: all
+Depends: ${misc:Depends}, postfix, postfix-pgsql, postgresql-client,
+ opendmarc, opendkim, adduser
+Description: Postfix provisioning for Homelab mail (virtual domains, SASL, DKIM/DMARC)
+ Wires Postfix's PostgreSQL-backed virtual domain/alias/recipient-access/
+ sender-login-maps lookups, SASL delegation to Dovecot, and DKIM/DMARC
+ milter integration -- via postconf -e (idempotent, additive-only) and a
+ pre-checked, sentinel-guarded master.cf block that refuses to insert
+ over an already-existing hand-written submission/smtps listener.
+ Integrates with whichever DKIM signer is actually live (OpenDKIM by
+ default, matching production) rather than reimplementing DKIM signing.
