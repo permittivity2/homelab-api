@@ -1,3 +1,30 @@
+homelab-borg-service-backup-client (0.2.7) unstable; urgency=medium
+
+  * Fix: the automatic bootstrap flow's final verification step reused
+    bootstrap_database(), which checks for the database's existence via
+    a connection to Postgres's "postgres" maintenance database -- caught
+    live: this fails through pgbouncer, whose [databases] stanza is a
+    deliberately curated allowlist exposing only "homelab", not
+    "postgres". Replaced with a direct SELECT 1 against "homelab"
+    (whose existence is already guaranteed by homelab-database at this
+    point) to verify the pgbouncer-fronted connection actually works.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 16:00:00 -0500
+
+homelab-borg-service-backup-client (0.2.6) unstable; urgency=medium
+
+  * Phase 3 pilot of the cross-package Postgres role strategy: the
+    run-tracking database prompt now offers automatic role/schema
+    bootstrap via homelab-database and registration via
+    homelab-pgbouncer (local or over SSH to whichever host has them),
+    instead of only accepting a pre-existing set of credentials. The
+    running service always connects through pgbouncer for runtime
+    traffic; direct Postgres access is only ever used for the one-time
+    setup step. Falls back to the previous manual host/port/user/
+    password entry unchanged if neither package is reachable.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 15:30:00 -0500
+
 homelab-borg-service-backup-client (0.2.5) unstable; urgency=medium
 
   * Release v0.2.5

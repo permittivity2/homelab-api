@@ -287,6 +287,24 @@ prompt_database_values() {
             ;;
     esac
 
+    local postgres_host pgbouncer_host use_auto
+    read -r -p "Postgres host (for one-time role/schema setup): " postgres_host
+    [ -n "$postgres_host" ] || die "postgres host is required"
+    read -r -p "PgBouncer host (for ongoing runtime connections) [$postgres_host]: " pgbouncer_host
+    pgbouncer_host=${pgbouncer_host:-$postgres_host}
+
+    read -r -p "Attempt automatic role/schema setup via homelab-database? [Y/n]: " use_auto
+    case "$use_auto" in
+        n|N|no|NO)
+            ;;
+        *)
+            if attempt_automatic_database_setup "$postgres_host" "$pgbouncer_host"; then
+                return
+            fi
+            warn "automatic setup unavailable or failed; falling back to manual entry"
+            ;;
+    esac
+
     read -r -p "Database host: " db_host
     [ -n "$db_host" ] || die "database host is required"
     read -r -p "Database port [5432]: " db_port
@@ -311,6 +329,117 @@ prompt_database_values() {
     if retry_bootstrap_database "$db_host" "$db_port" "$db_name" "$db_user" "$db_password"; then
         cfg_set database.enabled true
     fi
+}
+
+DB_ROLE_NAME=homelab_borgbackup
+DB_SCHEMA_NAME=service_backup
+SSH_PROBE_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
+
+# Runs homelab-database's bootstrap-app-role.sh, locally if it's
+# installed on this host, or over SSH on $postgres_host if that host has
+# it instead (the common case: this app host and the DB host are
+# different machines, and only the DB host runs homelab-database).
+# install/schema.sql is copied over first when running remotely, since
+# the script takes it as a local file path. Prints ROLE=/PASSWORD=/
+# SCRAM_SECRET= lines on success; returns non-zero if the script isn't
+# found in either place.
+run_bootstrap_app_role() {
+    local postgres_host=$1 role=$2 schema=$3 schema_sql=$4
+    local script=/usr/share/homelab-database/scripts/bootstrap-app-role.sh
+
+    if [ -x "$script" ]; then
+        "$script" --role "$role" --schema "$schema" --schema-sql "$schema_sql" --db-host "$postgres_host"
+        return
+    fi
+
+    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" "test -x $script" 2>/dev/null || return 1
+
+    local remote_tmp
+    remote_tmp=$(ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" mktemp) || return 1
+    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" "cat > $remote_tmp" < "$schema_sql"
+    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" \
+        "sudo $script --role '$role' --schema '$schema' --schema-sql $remote_tmp --db-host localhost; rc=\$?; rm -f $remote_tmp; exit \$rc"
+}
+
+# Same idea as run_bootstrap_app_role(), for homelab-pgbouncer's
+# bootstrap-pgbouncer-entry.sh -- no file argument here, so no need to
+# copy anything over first.
+run_bootstrap_pgbouncer_entry() {
+    local pgbouncer_host=$1 role=$2 scram_secret=$3
+    local script=/usr/share/homelab-pgbouncer/scripts/bootstrap-pgbouncer-entry.sh
+
+    if [ -x "$script" ]; then
+        "$script" --role "$role" --scram-secret "$scram_secret" --pgbouncer-host "$pgbouncer_host"
+        return
+    fi
+
+    ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" "test -x $script" 2>/dev/null || return 1
+    ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" \
+        "sudo $script --role '$role' --scram-secret '$scram_secret' --pgbouncer-host localhost"
+}
+
+# Runs both bootstrap steps (Postgres role/schema, then pgbouncer
+# registration) and, on success, points config.yml's database.* at the
+# PGBOUNCER host/port -- the running service always connects through
+# the pooler, never straight to Postgres; direct access is only ever
+# used for this one-time setup. Returns non-zero (with nothing written)
+# if either homelab-database or homelab-pgbouncer isn't reachable,
+# letting the caller fall back to the manual flow unchanged.
+attempt_automatic_database_setup() {
+    local postgres_host=$1 pgbouncer_host=$2
+    local pgbouncer_port=6432
+    local bootstrap_output role_out password_out secret_out
+
+    bootstrap_output=$(run_bootstrap_app_role "$postgres_host" "$DB_ROLE_NAME" "$DB_SCHEMA_NAME" "$REPO_ROOT/install/schema.sql") || return 1
+
+    role_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^ROLE=//p')
+    password_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^PASSWORD=//p')
+    secret_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^SCRAM_SECRET=//p')
+    if [ -z "$role_out" ] || [ -z "$password_out" ] || [ -z "$secret_out" ]; then
+        warn "bootstrap-app-role.sh did not return the expected ROLE/PASSWORD/SCRAM_SECRET output"
+        return 1
+    fi
+    log "role '$role_out' bootstrapped on $postgres_host"
+
+    local register_choice
+    read -r -p "Register this role with homelab-pgbouncer on $pgbouncer_host? [Y/n]: " register_choice
+    case "$register_choice" in
+        n|N|no|NO)
+            warn "not registering with pgbouncer -- add '$role_out' to its userlist.txt by hand before use"
+            ;;
+        *)
+            if ! run_bootstrap_pgbouncer_entry "$pgbouncer_host" "$role_out" "$secret_out"; then
+                warn "pgbouncer registration unavailable/failed -- add '$role_out' to its userlist.txt by hand before use"
+            fi
+            ;;
+    esac
+
+    cfg_set database.host "$pgbouncer_host"
+    cfg_set database.port "$pgbouncer_port"
+    cfg_set database.dbname homelab
+    cfg_set database.user "$role_out"
+    cfg_set database.password "$password_out"
+
+    install_psycopg2_if_needed
+
+    # Not retry_bootstrap_database()/bootstrap_database(): those check for
+    # the database's existence (and createdb it if missing) via a
+    # connection to Postgres's own "postgres" maintenance database --
+    # correct for the manual flow's arbitrary, possibly-not-yet-created
+    # dbname, but wrong here. pgbouncer's [databases] stanza is a
+    # deliberately curated allowlist (by design -- it's the whole reason
+    # a pgbouncer-fronted role can't reach anything beyond what's been
+    # explicitly proxied) exposing only "homelab", not "postgres"; the
+    # dbname is always "homelab" here and its existence is already
+    # guaranteed by homelab-database, so all that's left to verify is
+    # that this role can actually reach it through the pooler.
+    if PGPASSWORD="$password_out" psql -X -h "$pgbouncer_host" -p "$pgbouncer_port" -U "$role_out" -d homelab -tAc "SELECT 1" >/dev/null 2>&1; then
+        cfg_set database.enabled true
+    else
+        warn "could not verify the connection to '$role_out'@$pgbouncer_host:$pgbouncer_port through pgbouncer"
+        warn "database.enabled left false -- check pgbouncer/network config and re-run setup to retry"
+    fi
+    return 0
 }
 
 install_psycopg2_if_needed() {
