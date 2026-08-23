@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS service_backup.repos (
     UNIQUE (host_id, ssh_user, server, location)
 );
 
--- One row per completed `homelab-borgbackup backup` invocation.
+-- One row per completed `homelab-borg-service-backup-client backup` invocation.
 -- Written once, after the run finishes (this is a historical log, not
 -- a live-progress tracker) -- deliberately no duration_seconds column:
 -- it's derivable from finished_at - started_at, and storing it would
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS service_backup.backup_runs (
 CREATE INDEX IF NOT EXISTS backup_runs_repo_started_idx
     ON service_backup.backup_runs (repo_id, started_at DESC);
 
--- One row per completed `homelab-borgbackup check` invocation.
+-- One row per completed `homelab-borg-service-backup-client check` invocation.
 CREATE TABLE IF NOT EXISTS service_backup.check_runs (
     id            BIGSERIAL PRIMARY KEY,
     repo_id       INTEGER NOT NULL REFERENCES service_backup.repos(id) ON DELETE CASCADE,

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs the homelab-borgbackup client: dependencies, config skeleton,
-# SSH trust to borgbackup_server, script, and systemd units.
+# Installs the homelab-borg-service-backup-client: dependencies, config
+# skeleton, SSH trust to borgbackup_server, script, and systemd units.
 # Must be run as root. Interactive.
 #
 # Usage: install.sh [--passphrase-file FILE] [--skip-packages] [--skip-binary]
@@ -10,16 +10,17 @@
 #                            overwritten).
 #   --skip-packages          Don't apt-install dependencies (used when a
 #                            Debian package already declared them).
-#   --skip-binary            Don't copy bin/homelab-borgbackup into place
-#                            (used when a Debian package already put it
-#                            in $PATH). Systemd units are still
-#                            generated/enabled either way.
+#   --skip-binary            Don't copy bin/homelab-borg-service-backup-client
+#                            into place (used when a Debian package
+#                            already put it in $PATH). Systemd units are
+#                            still generated/enabled either way.
 #
 # This script runs in two contexts: a plain git checkout (REPO_ROOT is
 # this script's own parent directory: install/, config/, systemd/, bin/
-# as siblings) or a Debian package install, invoked as `homelab-borgbackup
-# configure` (REPO_ROOT is the package's shared data directory, laid out
-# identically). Detected automatically below.
+# as siblings) or a Debian package install, invoked as
+# `homelab-borg-service-backup-client setup` (REPO_ROOT is the package's
+# shared data directory, laid out identically). Detected automatically
+# below.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,10 +37,10 @@ CONFIG=$ETC_DIR/config.yml
 SSH_DIR=$ETC_DIR/ssh
 SSH_KEY=$SSH_DIR/id_ed25519
 KEY_ESCROW_DIR=$ETC_DIR/key-escrow
-if [ -x /usr/sbin/homelab-borgbackup ]; then
-    BIN_DEST=/usr/sbin/homelab-borgbackup   # already installed by the .deb
+if [ -x /usr/sbin/homelab-borg-service-backup-client ]; then
+    BIN_DEST=/usr/sbin/homelab-borg-service-backup-client   # already installed by the .deb
 else
-    BIN_DEST=/usr/local/sbin/homelab-borgbackup
+    BIN_DEST=/usr/local/sbin/homelab-borg-service-backup-client
 fi
 UNIT_DIR=/etc/systemd/system
 
@@ -343,7 +344,7 @@ retry_bootstrap_database() {
         fi
         case "$retry_choice" in
             n|N|s|S)
-                warn "skipping database setup; re-run 'homelab-borgbackup configure' later to retry"
+                warn "skipping database setup; re-run 'homelab-borg-service-backup-client setup' later to retry"
                 return 1
                 ;;
             *)
@@ -428,7 +429,7 @@ populate_homelab_defaults() {
 
     if [ "$have_api" -eq 1 ] || [ "$have_processor" -eq 1 ]; then
         log "detected homelab-api/processor, defaulting to dumping the 'mailserver' database"
-        cfg_set_databases homelab_only.databases "postgres:mailserver:/var/lib/homelab-borgbackup/dumps"
+        cfg_set_databases homelab_only.databases "postgres:mailserver:/var/lib/homelab-borg-service-backup-client/dumps"
     fi
 }
 
@@ -455,7 +456,7 @@ setup_ssh_trust() {
 
     if [ ! -f "$SSH_KEY" ]; then
         log "generating dedicated SSH key at $SSH_KEY"
-        ssh-keygen -t ed25519 -N "" -f "$SSH_KEY" -C "homelab-borgbackup-$identifier" >/dev/null
+        ssh-keygen -t ed25519 -N "" -f "$SSH_KEY" -C "homelab-borg-service-backup-client-$identifier" >/dev/null
     fi
     chmod 600 "$SSH_KEY"
     chmod 644 "$SSH_KEY.pub"
@@ -491,7 +492,7 @@ setup_ssh_trust() {
         fi
         case "$retry_choice" in
             s|S)
-                warn "skipping SSH trust check; re-run 'homelab-borgbackup configure' later to retry"
+                warn "skipping SSH trust check; re-run 'homelab-borg-service-backup-client setup' later to retry"
                 return
                 ;;
             *)
@@ -513,7 +514,7 @@ install_script_and_units() {
         log "skipping binary install (--skip-binary): using $BIN_DEST"
     else
         log "installing $BIN_DEST"
-        install -o root -g root -m 700 "$REPO_ROOT/bin/homelab-borgbackup" "$BIN_DEST"
+        install -o root -g root -m 700 "$REPO_ROOT/bin/homelab-borg-service-backup-client" "$BIN_DEST"
     fi
 
     local sched_mode
@@ -521,12 +522,12 @@ install_script_and_units() {
 
     if [ "$sched_mode" = "continuous" ]; then
         log "installing continuous service (no timer)"
-        systemctl disable --now homelab-borgbackup.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-borgbackup.timer"
+        systemctl disable --now homelab-borg-service-backup-client.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-borg-service-backup-client.timer"
         sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-borgbackup-continuous.service.tmpl" > "$UNIT_DIR/homelab-borgbackup.service"
+            "$REPO_ROOT/systemd/homelab-borg-service-backup-client-continuous.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.service"
         systemctl daemon-reload
-        systemctl enable --now homelab-borgbackup.service
+        systemctl enable --now homelab-borg-service-backup-client.service
     else
         local on_calendar jitter_seconds
         jitter_seconds=$(cfg_get schedule.jitter_seconds); jitter_seconds=${jitter_seconds:-1800}
@@ -546,13 +547,13 @@ install_script_and_units() {
         esac
 
         log "installing oneshot service + timer (OnCalendar=$on_calendar, RandomizedDelaySec=$jitter_seconds)"
-        systemctl disable --now homelab-borgbackup.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borg-service-backup-client.service >/dev/null 2>&1 || true
         sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-borgbackup.service.tmpl" > "$UNIT_DIR/homelab-borgbackup.service"
+            "$REPO_ROOT/systemd/homelab-borg-service-backup-client.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.service"
         sed -e "s|__ON_CALENDAR__|$on_calendar|" -e "s|__JITTER_SECONDS__|$jitter_seconds|" \
-            "$REPO_ROOT/systemd/homelab-borgbackup.timer.tmpl" > "$UNIT_DIR/homelab-borgbackup.timer"
+            "$REPO_ROOT/systemd/homelab-borg-service-backup-client.timer.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.timer"
         systemctl daemon-reload
-        systemctl enable --now homelab-borgbackup.timer
+        systemctl enable --now homelab-borg-service-backup-client.timer
     fi
 
     install_check_unit
@@ -567,8 +568,8 @@ install_check_unit() {
 
     if [ "$check_mode" = "never" ]; then
         log "integrity_check.mode is never, removing any existing check timer"
-        systemctl disable --now homelab-borgbackup-check.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-borgbackup-check.service" "$UNIT_DIR/homelab-borgbackup-check.timer"
+        systemctl disable --now homelab-borg-service-backup-client-check.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-borg-service-backup-client-check.service" "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
         systemctl daemon-reload
         return
     fi
@@ -580,11 +581,11 @@ install_check_unit() {
 
     log "installing integrity check oneshot service + timer (OnCalendar=$check_mode)"
     sed "s|__BIN_PATH__|$BIN_DEST|" \
-        "$REPO_ROOT/systemd/homelab-borgbackup-check.service.tmpl" > "$UNIT_DIR/homelab-borgbackup-check.service"
+        "$REPO_ROOT/systemd/homelab-borg-service-backup-client-check.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client-check.service"
     sed "s|__ON_CALENDAR__|$check_mode|" \
-        "$REPO_ROOT/systemd/homelab-borgbackup-check.timer.tmpl" > "$UNIT_DIR/homelab-borgbackup-check.timer"
+        "$REPO_ROOT/systemd/homelab-borg-service-backup-client-check.timer.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
     systemctl daemon-reload
-    systemctl enable --now homelab-borgbackup-check.timer
+    systemctl enable --now homelab-borg-service-backup-client-check.timer
 }
 
 # Picks (once, persisted) a random hour from schedule.window_hours and a
@@ -632,8 +633,8 @@ print_summary() {
     log "schedule:    $(cfg_get schedule.mode)"
     log "database:    $([ "$(cfg_get database.enabled)" = "true" ] && echo "enabled ($(cfg_get database.dbname))" || echo "disabled")"
     echo
-    log "check status with: systemctl status homelab-borgbackup.service homelab-borgbackup.timer 2>/dev/null"
-    log "check logs with:   journalctl -t homelab-borgbackup -f"
+    log "check status with: systemctl status homelab-borg-service-backup-client.service homelab-borg-service-backup-client.timer 2>/dev/null"
+    log "check logs with:   journalctl -t homelab-borg-service-backup-client -f"
     log "dry-run a manual test with: $BIN_DEST backup --dry-run --once"
 
     if [ -n "$GENERATED_PASSPHRASE" ]; then
@@ -648,7 +649,7 @@ print_summary() {
         echo "    $CONFIG"
         echo
         echo "  A key export will additionally appear under $KEY_ESCROW_DIR"
-        echo "  after the first backup run (see homelab-borgbackup backup --once)."
+        echo "  after the first backup run (see homelab-borg-service-backup-client backup --once)."
         echo
         echo "  Copy the passphrase and the exported key files to a password"
         echo "  manager / secrets vault AND an offline/paper copy before this host"

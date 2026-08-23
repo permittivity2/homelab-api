@@ -71,13 +71,13 @@ NETWORK_OR_VIRTUAL_FSTYPES = {
     "squashfs", "iso9660",
 }
 
-log = logging.getLogger("homelab-borgbackup")
+log = logging.getLogger("homelab-borg-service-backup-client")
 
 
 def setup_logging():
     log.setLevel(logging.INFO)
     if _HAVE_JOURNAL:
-        handler = JournalHandler(SYSLOG_IDENTIFIER="homelab-borgbackup")
+        handler = JournalHandler(SYSLOG_IDENTIFIER="homelab-borg-service-backup-client")
     else:
         handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter("%(message)s"))
@@ -291,8 +291,9 @@ def build_env(passphrase, ssh_key_path):
 def run_borg(cmd, env):
     """Run a borg command, relaying its output into our own journal
     identity (otherwise it's tagged as coming from `borg`, not
-    `homelab-borgbackup`, and `journalctl -t homelab-borgbackup` misses
-    it entirely). Borg's exit code 1 means "completed with warnings"
+    `homelab-borg-service-backup-client`, and `journalctl -t
+    homelab-borg-service-backup-client` misses it entirely). Borg's exit
+    code 1 means "completed with warnings"
     (e.g. a transient race reading a procfs entry) and is not a failure;
     only 2+ is a real error."""
     result = subprocess.run(cmd, env=env, capture_output=True, text=True)
@@ -552,7 +553,7 @@ def run_backup(config, dry_run):
             stats = None
 
             with tempfile.NamedTemporaryFile(
-                mode="w", prefix="homelab-borgbackup-patterns-", suffix=".txt", delete=False
+                mode="w", prefix="homelab-borg-service-backup-client-patterns-", suffix=".txt", delete=False
             ) as pf:
                 pf.write("\n".join(pattern_lines) + "\n")
                 patterns_file = pf.name

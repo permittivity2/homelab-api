@@ -1,5 +1,5 @@
 #!/bin/sh
-# Cleans up the systemd units that `homelab-borgbackup configure`/
+# Cleans up the systemd units that `homelab-borg-service-backup-client configure`/
 # install.sh write to /etc/systemd/system/ at runtime -- outside dpkg's
 # file manifest, since they're generated from templates (OnCalendar=,
 # ExecStart= paths) rather than shipped statically. Without this, `apt
@@ -13,12 +13,12 @@ ETC_DIR=/etc/homelab/borgbackup
 
 case "$1" in
     remove|purge)
-        systemctl disable --now homelab-borgbackup.service >/dev/null 2>&1 || true
-        systemctl disable --now homelab-borgbackup.timer >/dev/null 2>&1 || true
-        systemctl disable --now homelab-borgbackup-check.service >/dev/null 2>&1 || true
-        systemctl disable --now homelab-borgbackup-check.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-borgbackup.service" "$UNIT_DIR/homelab-borgbackup.timer" \
-              "$UNIT_DIR/homelab-borgbackup-check.service" "$UNIT_DIR/homelab-borgbackup-check.timer"
+        systemctl disable --now homelab-borg-service-backup-client.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borg-service-backup-client.timer >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borg-service-backup-client-check.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borg-service-backup-client-check.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-borg-service-backup-client.service" "$UNIT_DIR/homelab-borg-service-backup-client.timer" \
+              "$UNIT_DIR/homelab-borg-service-backup-client-check.service" "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
         systemctl daemon-reload >/dev/null 2>&1 || true
         ;;
 esac

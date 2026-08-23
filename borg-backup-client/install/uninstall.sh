@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ETC_DIR=/etc/homelab/borgbackup
-BIN_DEST=/usr/local/sbin/homelab-borgbackup
+BIN_DEST=/usr/local/sbin/homelab-borg-service-backup-client
 UNIT_DIR=/etc/systemd/system
 
 PURGE=0
@@ -19,12 +19,12 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 log "stopping and disabling units"
-systemctl disable --now homelab-borgbackup.service >/dev/null 2>&1 || true
-systemctl disable --now homelab-borgbackup.timer >/dev/null 2>&1 || true
-systemctl disable --now homelab-borgbackup-check.service >/dev/null 2>&1 || true
-systemctl disable --now homelab-borgbackup-check.timer >/dev/null 2>&1 || true
-rm -f "$UNIT_DIR/homelab-borgbackup.service" "$UNIT_DIR/homelab-borgbackup.timer" \
-      "$UNIT_DIR/homelab-borgbackup-check.service" "$UNIT_DIR/homelab-borgbackup-check.timer"
+systemctl disable --now homelab-borg-service-backup-client.service >/dev/null 2>&1 || true
+systemctl disable --now homelab-borg-service-backup-client.timer >/dev/null 2>&1 || true
+systemctl disable --now homelab-borg-service-backup-client-check.service >/dev/null 2>&1 || true
+systemctl disable --now homelab-borg-service-backup-client-check.timer >/dev/null 2>&1 || true
+rm -f "$UNIT_DIR/homelab-borg-service-backup-client.service" "$UNIT_DIR/homelab-borg-service-backup-client.timer" \
+      "$UNIT_DIR/homelab-borg-service-backup-client-check.service" "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
 systemctl daemon-reload
 
 log "removing $BIN_DEST"

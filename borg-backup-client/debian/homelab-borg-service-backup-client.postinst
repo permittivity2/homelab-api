@@ -4,9 +4,9 @@ set -e
 if [ "$1" = "configure" ]; then
     echo
     echo "homelab-borg-service-backup installed."
-    echo "Run 'homelab-borgbackup setup' to finish setup (encryption,"
-    echo "backup mode, schedule, and SSH trust to the backup server)."
-    echo "Safe to re-run any time to change settings."
+    echo "Run 'homelab-borg-service-backup-client setup' to finish setup"
+    echo "(encryption, backup mode, schedule, and SSH trust to the backup"
+    echo "server). Safe to re-run any time to change settings."
     echo
 fi
 

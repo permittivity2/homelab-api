@@ -1,4 +1,4 @@
-"""Unit tests for the pure-logic functions in bin/homelab-borgbackup.
+"""Unit tests for the pure-logic functions in bin/homelab-borg-service-backup-client.
 
 No real borg/SSH/network calls -- the manual dry-run/build verification
 done alongside this tool's development already covers integration-level
@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-import homelab_borgbackup as hb
+import homelab_borg_service_backup_client as hb
 
 
 # --- _truthy ---------------------------------------------------------------
@@ -76,9 +76,9 @@ def test_local_only_mode_excludes_network_and_virtual_mounts(monkeypatch):
 def test_homelab_only_mode_combines_paths_and_dump_dirs():
     config = {"homelab_only": {"paths": ["/etc/homelab/api"]}}
     sources, _patterns = hb.build_sources_and_patterns(
-        config, "homelab_only", ["/var/lib/homelab-borgbackup/dumps"]
+        config, "homelab_only", ["/var/lib/homelab-borg-service-backup-client/dumps"]
     )
-    assert sources == ["/etc/homelab/api", "/var/lib/homelab-borgbackup/dumps"]
+    assert sources == ["/etc/homelab/api", "/var/lib/homelab-borg-service-backup-client/dumps"]
 
 
 def test_specific_mode_uses_specific_paths():

@@ -1,3 +1,17 @@
+homelab-borg-service-backup-server (0.2.3) unstable; urgency=medium
+
+  * Release v0.2.3
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 12:47:36 -0500
+
+homelab-borg-service-backup-server (0.2.3) unstable; urgency=medium
+
+  * Update setup-admin-recovery-key.sh's admin-recovery key directory
+    name and printed usage example to match the client package's binary
+    rename to 'homelab-borg-service-backup-client'.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:30:00 -0500
+
 homelab-borg-service-backup-server (0.2.2) unstable; urgency=medium
 
   * Release v0.2.2

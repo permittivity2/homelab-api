@@ -1,3 +1,22 @@
+homelab-borg-service-backup-client (0.2.4) unstable; urgency=medium
+
+  * Release v0.2.4
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 12:47:28 -0500
+
+homelab-borg-service-backup-client (0.2.4) unstable; urgency=medium
+
+  * BREAKING: renamed the CLI binary from 'homelab-borgbackup' to
+    'homelab-borg-service-backup-client' (matching the package name,
+    same convention as the server package), along with its systemd
+    unit names, syslog identifier, and man page. Update any scripts,
+    cron jobs, or muscle memory referencing the old name. No compat
+    symlink is provided (no production host has this client configured
+    yet). Also fixed tests/conftest.py's broken cross-repo import path
+    left over from the client/server package split.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 09:30:00 -0500
+
 homelab-borg-service-backup-client (0.2.3) unstable; urgency=medium
 
   * Release v0.2.3

@@ -18,8 +18,8 @@ Description: Homelab service/config backup client built on borg
  /etc/homelab/borgbackup/ and run under systemd. Intended to let an
  administrator restore a homelab service's config (/etc/homelab/*) or an
  entire server to a point in time after a disaster; not a user-data
- backup tool. Run `homelab-borgbackup configure` after installing this
- package to set up config and encryption; SSH trust to the backup server
- is completed by an administrator running `enroll` on the
+ backup tool. Run `homelab-borg-service-backup-client setup` after
+ installing this package to set up config and encryption; SSH trust to
+ the backup server is completed by an administrator running `enroll` on the
  homelab-borg-service-backup-server package, using this client's printed
  public key.

@@ -56,7 +56,7 @@ e.g. when decommissioning a host).
 
 ```
 sudo apt install ./homelab-borg-service-backup-client_*.deb
-sudo homelab-borgbackup configure
+sudo homelab-borg-service-backup-client setup
 ```
 
 (Or, for a non-packaged install: `sudo ./install/install.sh`.)
@@ -79,7 +79,7 @@ This is interactive and root-only. It will:
    key filled in) for an administrator to run **on the backup server**,
    then offers to re-check once that's done — no SSH or sudo access to
    the backup server is ever needed from the client side.
-6. Install the script to `/usr/local/sbin/homelab-borgbackup` and the
+6. Install the script to `/usr/local/sbin/homelab-borg-service-backup-client` and the
    appropriate systemd unit(s), then enable+start them.
 7. Print a one-time summary telling you exactly what to escrow and
    where, if a new passphrase was generated.
@@ -151,14 +151,14 @@ Disaster recovery runbook, once a host is gone and you're rebuilding it
    and the admin recovery key from step above.
 3. List what's available:
    ```
-   homelab-borgbackup list-archives \
+   homelab-borg-service-backup-client list-archives \
        --host <original-identifier> --server <borgbackup_server> \
        --ssh-key /path/to/admin-recovery/id_ed25519 \
        --passphrase-file /path/to/escrowed-passphrase
    ```
 4. Extract into a staging directory (never straight onto `/`):
    ```
-   homelab-borgbackup restore \
+   homelab-borg-service-backup-client restore \
        --host <original-identifier> --server <borgbackup_server> \
        --ssh-key /path/to/admin-recovery/id_ed25519 \
        --passphrase-file /path/to/escrowed-passphrase \
@@ -171,8 +171,8 @@ Disaster recovery runbook, once a host is gone and you're rebuilding it
 `--passphrase-file` on `list-archives`/`restore` all fall back to the
 local `config.yml` when omitted, so restoring a specific file on a
 still-alive host (no disaster involved) just needs
-`homelab-borgbackup list-archives` / `restore --archive ... --target ...`
-with no overrides.
+`homelab-borg-service-backup-client list-archives` / `restore --archive
+... --target ...` with no overrides.
 
 ## Run history database (optional)
 
@@ -233,13 +233,14 @@ points:
 ## Commands
 
 ```
-homelab-borgbackup backup [--dry-run] [--once] [--config PATH]
-homelab-borgbackup check [--config PATH]
-homelab-borgbackup list-archives [--host ID] [--server S] [--ssh-user U]
-                                  [--location DIR] [--ssh-key PATH]
-                                  [--passphrase-file PATH]
-homelab-borgbackup restore --archive NAME --target DIR [--paths ...]
-                            [--dry-run] [same overrides as list-archives]
+homelab-borg-service-backup-client backup [--dry-run] [--once] [--config PATH]
+homelab-borg-service-backup-client check [--config PATH]
+homelab-borg-service-backup-client list-archives [--host ID] [--server S] [--ssh-user U]
+                                                  [--location DIR] [--ssh-key PATH]
+                                                  [--passphrase-file PATH]
+homelab-borg-service-backup-client restore --archive NAME --target DIR [--paths ...]
+                                            [--dry-run] [same overrides as list-archives]
+homelab-borg-service-backup-client setup [--passphrase-file PATH]
 ```
 
 Running the binary with no subcommand (or one starting with a flag) is
@@ -249,8 +250,8 @@ invocations and the systemd units.
 ## Manual testing
 
 ```
-/usr/local/sbin/homelab-borgbackup backup --dry-run --once
-journalctl -t homelab-borgbackup -f
+/usr/local/sbin/homelab-borg-service-backup-client backup --dry-run --once
+journalctl -t homelab-borg-service-backup-client -f
 ```
 
 `--dry-run` prints the resolved sources, exclude patterns, and the exact
@@ -284,7 +285,7 @@ root.
 
 The server package's setup (user/group/directory/config) runs
 non-interactively from `postinst` — see Server setup above. The client
-package still requires running `homelab-borgbackup configure` (or
+package still requires running `homelab-borg-service-backup-client setup` (or
 `install.sh`, for a non-packaged install) once to set config values and
 print the `enroll` command for the server administrator — that step is
 interactive and doesn't fit a non-interactive `postinst`.

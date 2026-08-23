@@ -8,8 +8,8 @@ DATA_DIR = $(PKG)/usr/share/homelab-borg-service-backup-client
 
 override_dh_install:
 	dh_install
-	install -D -m 755 bin/homelab-borgbackup \
-		$(PKG)/usr/sbin/homelab-borgbackup
+	install -D -m 755 bin/homelab-borg-service-backup-client \
+		$(PKG)/usr/sbin/homelab-borg-service-backup-client
 	install -D -m 755 install/install.sh \
 		$(DATA_DIR)/install/install.sh
 	install -D -m 755 install/configedit.py \
@@ -18,16 +18,16 @@ override_dh_install:
 		$(DATA_DIR)/install/schema.sql
 	install -D -m 644 config/config.example.yml \
 		$(DATA_DIR)/config/config.example.yml
-	install -D -m 644 systemd/homelab-borgbackup.service.tmpl \
-		$(DATA_DIR)/systemd/homelab-borgbackup.service.tmpl
-	install -D -m 644 systemd/homelab-borgbackup-continuous.service.tmpl \
-		$(DATA_DIR)/systemd/homelab-borgbackup-continuous.service.tmpl
-	install -D -m 644 systemd/homelab-borgbackup.timer.tmpl \
-		$(DATA_DIR)/systemd/homelab-borgbackup.timer.tmpl
-	install -D -m 644 systemd/homelab-borgbackup-check.service.tmpl \
-		$(DATA_DIR)/systemd/homelab-borgbackup-check.service.tmpl
-	install -D -m 644 systemd/homelab-borgbackup-check.timer.tmpl \
-		$(DATA_DIR)/systemd/homelab-borgbackup-check.timer.tmpl
+	install -D -m 644 systemd/homelab-borg-service-backup-client.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-borg-service-backup-client.service.tmpl
+	install -D -m 644 systemd/homelab-borg-service-backup-client-continuous.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-borg-service-backup-client-continuous.service.tmpl
+	install -D -m 644 systemd/homelab-borg-service-backup-client.timer.tmpl \
+		$(DATA_DIR)/systemd/homelab-borg-service-backup-client.timer.tmpl
+	install -D -m 644 systemd/homelab-borg-service-backup-client-check.service.tmpl \
+		$(DATA_DIR)/systemd/homelab-borg-service-backup-client-check.service.tmpl
+	install -D -m 644 systemd/homelab-borg-service-backup-client-check.timer.tmpl \
+		$(DATA_DIR)/systemd/homelab-borg-service-backup-client-check.timer.tmpl
 
 override_dh_auto_build:
 	# No build step needed for a single Python script + shell installer

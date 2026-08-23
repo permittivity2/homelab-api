@@ -16,5 +16,5 @@ def _load(module_name, script_path):
     loader.exec_module(module)
 
 
-_load("homelab_borgbackup", REPO_ROOT / "bin" / "homelab-borgbackup")
-_load("homelab_borg_service_backup_server", REPO_ROOT / "server" / "homelab-borg-service-backup-server")
+_load("homelab_borg_service_backup_client", REPO_ROOT / "bin" / "homelab-borg-service-backup-client")
+_load("homelab_borg_service_backup_server", REPO_ROOT.parent / "borg-backup-server" / "homelab-borg-service-backup-server")

@@ -1,12 +1,12 @@
-.TH HOMELAB-BORGBACKUP 8 "2026-08-16" "homelab-borg-service-backup" "System Administration"
+.TH HOMELAB-BORG-SERVICE-BACKUP-CLIENT 8 "2026-08-23" "homelab-borg-service-backup" "System Administration"
 .SH NAME
-homelab-borgbackup \- borg-based backup/restore client for homelab service configs
+homelab-borg-service-backup-client \- borg-based backup/restore client for homelab service configs
 .SH SYNOPSIS
-.B homelab-borgbackup
+.B homelab-borg-service-backup-client
 .I command
 .RI [ args ...]
 .SH DESCRIPTION
-.B homelab-borgbackup
+.B homelab-borg-service-backup-client
 pushes encrypted
 .BR borg (1)
 archives from this host to a centralized backup server over SSH, driven
@@ -52,7 +52,7 @@ Run
 .BR --repair ,
 which is a deliberate manual admin action) against this host's own
 repo. Also what the
-.B homelab-borgbackup-check
+.B homelab-borg-service-backup-client-check
 timer invokes, on the schedule set by
 .B integrity_check.mode
 in config.yml (default
