@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 644 pdns.d/90-homelab-dns-server.conf.template \
+		debian/homelab-dns-server/usr/share/homelab-dns-server/pdns.d/90-homelab-dns-server.conf.template
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests

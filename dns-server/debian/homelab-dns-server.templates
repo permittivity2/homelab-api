@@ -1,0 +1,52 @@
+Template: homelab-dns-server/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host for the powerdns database:
+
+Template: homelab-dns-server/db_port
+Type: string
+Default: 5432
+Description: PostgreSQL port:
+
+Template: homelab-dns-server/db_name
+Type: string
+Default: powerdns
+Description: PostgreSQL database name:
+
+Template: homelab-dns-server/db_user
+Type: string
+Default: pdnsuser
+Description: PostgreSQL role to connect as:
+
+Template: homelab-dns-server/db_password
+Type: password
+Description: PostgreSQL role password:
+
+Template: homelab-dns-server/role
+Type: select
+Choices: master, slave
+Default: master
+Description: PowerDNS role for this server:
+ "master" serves as the primary authoritative source and notifies
+ slaves of zone changes. "slave" receives zone transfers from a master
+ and refuses to originate them further.
+
+Template: homelab-dns-server/allow_axfr_ips
+Type: string
+Default:
+Description: (master only) IPs allowed to AXFR zone transfers (space-separated):
+
+Template: homelab-dns-server/also_notify
+Type: string
+Default:
+Description: (master only) IPs to notify on zone changes (space-separated):
+
+Template: homelab-dns-server/slave_cycle_interval
+Type: string
+Default: 60
+Description: (slave only) Seconds between checking for zone updates:
+
+Template: homelab-dns-server/disable_axfr
+Type: boolean
+Default: true
+Description: (slave only) Refuse to re-serve zone transfers to further downstream slaves?
