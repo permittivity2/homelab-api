@@ -1,3 +1,23 @@
+homelab-borg-service-backup-client (0.2.8) unstable; urgency=medium
+
+  * Default the Postgres host prompt to localhost, the pgbouncer/manual
+    database host prompts to whatever Postgres host was already given,
+    and the database role name (both the automatic bootstrap flow and
+    the manual fallback's "Database user" prompt) to this package's own
+    name -- all previously required typing the same values every time.
+  * Fix: when the pgbouncer host resolves to this same host but
+    homelab-pgbouncer isn't installed here, the automatic setup flow
+    fell through to SSHing to itself to re-check -- caught live: this
+    silently fails (no passwordless root-to-root loopback SSH set up),
+    producing a confusing "pgbouncer registration unavailable/failed"
+    warning instead of a clear "not installed here" outcome. Both
+    run_bootstrap_app_role() and run_bootstrap_pgbouncer_entry() now
+    skip the SSH fallback entirely when the target is this host, since
+    SSHing to itself for a file already confirmed missing locally can't
+    ever find it.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 17:30:00 -0500
+
 homelab-borg-service-backup-client (0.2.7) unstable; urgency=medium
 
   * Fix: the automatic bootstrap flow's final verification step reused

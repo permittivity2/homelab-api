@@ -287,32 +287,34 @@ prompt_database_values() {
             ;;
     esac
 
-    local postgres_host pgbouncer_host use_auto
-    read -r -p "Postgres host (for one-time role/schema setup): " postgres_host
-    [ -n "$postgres_host" ] || die "postgres host is required"
+    local postgres_host pgbouncer_host db_role_name use_auto
+    read -r -p "Postgres host (for one-time role/schema setup) [localhost]: " postgres_host
+    postgres_host=${postgres_host:-localhost}
     read -r -p "PgBouncer host (for ongoing runtime connections) [$postgres_host]: " pgbouncer_host
     pgbouncer_host=${pgbouncer_host:-$postgres_host}
+    read -r -p "Database role name [$DB_ROLE_DEFAULT]: " db_role_name
+    db_role_name=${db_role_name:-$DB_ROLE_DEFAULT}
 
     read -r -p "Attempt automatic role/schema setup via homelab-database? [Y/n]: " use_auto
     case "$use_auto" in
         n|N|no|NO)
             ;;
         *)
-            if attempt_automatic_database_setup "$postgres_host" "$pgbouncer_host"; then
+            if attempt_automatic_database_setup "$postgres_host" "$pgbouncer_host" "$db_role_name"; then
                 return
             fi
             warn "automatic setup unavailable or failed; falling back to manual entry"
             ;;
     esac
 
-    read -r -p "Database host: " db_host
-    [ -n "$db_host" ] || die "database host is required"
+    read -r -p "Database host [$postgres_host]: " db_host
+    db_host=${db_host:-$postgres_host}
     read -r -p "Database port [5432]: " db_port
     db_port=${db_port:-5432}
     read -r -p "Database name [homelab]: " db_name
     db_name=${db_name:-homelab}
-    read -r -p "Database user: " db_user
-    [ -n "$db_user" ] || die "database user is required"
+    read -r -p "Database user [$db_role_name]: " db_user
+    db_user=${db_user:-$db_role_name}
     read -r -s -p "Database password: " db_password; echo
 
     # Saved as soon as entered (even before the connection is verified)
@@ -331,9 +333,19 @@ prompt_database_values() {
     fi
 }
 
-DB_ROLE_NAME=homelab_borgbackup
+DB_ROLE_DEFAULT=homelab-borg-service-backup-client
 DB_SCHEMA_NAME=service_backup
 SSH_PROBE_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
+
+is_local_host() {
+    local host=$1
+    case "$host" in
+        localhost|127.0.0.1|::1) return 0 ;;
+    esac
+    [ "$host" = "$(hostname)" ] && return 0
+    [ "$host" = "$(hostname -f 2>/dev/null || true)" ] && return 0
+    return 1
+}
 
 # Runs homelab-database's bootstrap-app-role.sh, locally if it's
 # installed on this host, or over SSH on $postgres_host if that host has
@@ -342,7 +354,11 @@ SSH_PROBE_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=ac
 # install/schema.sql is copied over first when running remotely, since
 # the script takes it as a local file path. Prints ROLE=/PASSWORD=/
 # SCRAM_SECRET= lines on success; returns non-zero if the script isn't
-# found in either place.
+# found in either place. If $postgres_host IS this host, never falls
+# through to SSH -- SSHing to itself just to re-check for a file that's
+# already confirmed missing locally can only fail the same way again (or
+# fail outright if this host has no key-based loopback SSH trust set up
+# at all, which is the common case and not something worth requiring).
 run_bootstrap_app_role() {
     local postgres_host=$1 role=$2 schema=$3 schema_sql=$4
     local script=/usr/share/homelab-database/scripts/bootstrap-app-role.sh
@@ -351,6 +367,7 @@ run_bootstrap_app_role() {
         "$script" --role "$role" --schema "$schema" --schema-sql "$schema_sql" --db-host "$postgres_host"
         return
     fi
+    is_local_host "$postgres_host" && return 1
 
     ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" "test -x $script" 2>/dev/null || return 1
 
@@ -363,7 +380,9 @@ run_bootstrap_app_role() {
 
 # Same idea as run_bootstrap_app_role(), for homelab-pgbouncer's
 # bootstrap-pgbouncer-entry.sh -- no file argument here, so no need to
-# copy anything over first.
+# copy anything over first. Same is_local_host() short-circuit and same
+# reasoning: never SSH to this host to look for something already
+# confirmed absent locally.
 run_bootstrap_pgbouncer_entry() {
     local pgbouncer_host=$1 role=$2 scram_secret=$3
     local script=/usr/share/homelab-pgbouncer/scripts/bootstrap-pgbouncer-entry.sh
@@ -372,6 +391,7 @@ run_bootstrap_pgbouncer_entry() {
         "$script" --role "$role" --scram-secret "$scram_secret" --pgbouncer-host "$pgbouncer_host"
         return
     fi
+    is_local_host "$pgbouncer_host" && return 1
 
     ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" "test -x $script" 2>/dev/null || return 1
     ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" \
@@ -386,11 +406,11 @@ run_bootstrap_pgbouncer_entry() {
 # if either homelab-database or homelab-pgbouncer isn't reachable,
 # letting the caller fall back to the manual flow unchanged.
 attempt_automatic_database_setup() {
-    local postgres_host=$1 pgbouncer_host=$2
+    local postgres_host=$1 pgbouncer_host=$2 role_name=$3
     local pgbouncer_port=6432
     local bootstrap_output role_out password_out secret_out
 
-    bootstrap_output=$(run_bootstrap_app_role "$postgres_host" "$DB_ROLE_NAME" "$DB_SCHEMA_NAME" "$REPO_ROOT/install/schema.sql") || return 1
+    bootstrap_output=$(run_bootstrap_app_role "$postgres_host" "$role_name" "$DB_SCHEMA_NAME" "$REPO_ROOT/install/schema.sql") || return 1
 
     role_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^ROLE=//p')
     password_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^PASSWORD=//p')
