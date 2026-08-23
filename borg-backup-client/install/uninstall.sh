@@ -27,6 +27,13 @@ rm -f "$UNIT_DIR/homelab-borg-service-backup-client.service" "$UNIT_DIR/homelab-
       "$UNIT_DIR/homelab-borg-service-backup-client-check.service" "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
 systemctl daemon-reload
 
+# daemon-reload only re-reads unit FILES; it does not clear a unit's
+# cached "failed" job state from a run that happened before removal.
+systemctl reset-failed homelab-borg-service-backup-client.service >/dev/null 2>&1 || true
+systemctl reset-failed homelab-borg-service-backup-client.timer >/dev/null 2>&1 || true
+systemctl reset-failed homelab-borg-service-backup-client-check.service >/dev/null 2>&1 || true
+systemctl reset-failed homelab-borg-service-backup-client-check.timer >/dev/null 2>&1 || true
+
 log "removing $BIN_DEST"
 rm -f "$BIN_DEST"
 

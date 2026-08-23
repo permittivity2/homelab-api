@@ -1,3 +1,15 @@
+homelab-borg-service-backup-client (0.2.9) unstable; urgency=medium
+
+  * Fix: `apt remove` left a stale "Active: failed" status visible in
+    `systemctl status` for units that had already failed before
+    removal, even though the unit files themselves were correctly gone
+    (`Loaded: not-found`) -- caught live. `systemctl daemon-reload`
+    only re-reads unit files; it doesn't clear a unit's cached failed
+    job state. postrm and install/uninstall.sh now also call
+    `systemctl reset-failed` for each of the four units they manage.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 17:45:00 -0500
+
 homelab-borg-service-backup-client (0.2.8) unstable; urgency=medium
 
   * Default the Postgres host prompt to localhost, the pgbouncer/manual
