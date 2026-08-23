@@ -1,3 +1,35 @@
+homelab-database (0.2.1) unstable; urgency=medium
+
+  * Fix bootstrap-app-role.sh: it previously created its own
+    "--schema" via CREATE SCHEMA ... AUTHORIZATION before applying
+    --schema-sql, which silently split from whatever schema name the
+    SQL file itself hardcoded internally (e.g. borg-backup-client's
+    schema.sql creates `service_backup` itself) -- the role ended up
+    granted on an empty, unrelated schema. Now applies --schema-sql
+    as-is and only grants afterward; --schema must name what the file
+    itself creates. Also added the missing `GRANT USAGE, CREATE ON
+    SCHEMA` (table/sequence grants alone aren't enough to see objects
+    in a schema at all) and fixed log/psql output leaking into the
+    captured SCRAM_SECRET on stdout. Found and fixed via live testing
+    on ssh test.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 14:12:41 -0500
+
+homelab-database (0.2.0) unstable; urgency=medium
+
+  * Create a shared `homelab` database on every configure (idempotent),
+    as the substrate other homelab-* packages' own schemas live inside.
+  * Add scripts/bootstrap-app-role.sh: a reusable tool for other
+    packages' installers to create their own narrow role + schema,
+    using OS-level peer auth only (local `sudo -u postgres`, or the
+    same over SSH to a remote DB host, or printed SQL for a human to
+    run by hand as a last resort) -- never a stored/network admin
+    Postgres credential. Prints the new role's password and its
+    ready-to-use SCRAM secret (from pg_authid.rolpassword) for the
+    caller to use and, if applicable, register with homelab-pgbouncer.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 14:00:00 -0500
+
 homelab-database (0.1.0) unstable; urgency=medium
 
   * Initial release. Generic PostgreSQL provisioning/hardening substrate:

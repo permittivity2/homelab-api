@@ -102,10 +102,22 @@ case "$1" in
 
         db_stop
 
+        # The one shared substrate database every homelab-* app's own
+        # schema lives inside (each app creates and owns only its own
+        # schema/role within it -- see scripts/bootstrap-app-role.sh --
+        # this package still never creates or owns any application's
+        # database/schema beyond this shared shell).
+        if [ "$(sudo -u postgres psql -X -tAc "SELECT 1 FROM pg_database WHERE datname='homelab'")" != "1" ]; then
+            sudo -u postgres createdb homelab
+            echo "  created shared 'homelab' database"
+        fi
+
         echo ""
         echo "homelab-database configured (cluster $PGVER, adopt_existing=$ADOPT_EXISTING)."
         echo "conf.d:          $CONF_DROPIN"
         echo "pg_hba.conf.d:   $HBA_DROPIN"
+        echo "shared database: homelab"
+        echo "bootstrap tool:  $SHARE_DIR/scripts/bootstrap-app-role.sh"
         echo ""
         ;;
 

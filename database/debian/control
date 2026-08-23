@@ -12,7 +12,13 @@ Depends: ${misc:Depends}, postgresql, postgresql-client, adduser
 Description: Generic PostgreSQL provisioning/hardening substrate for Homelab
  Ensures a properly configured, network-reachable, secured PostgreSQL
  cluster exists, via drop-in config files only -- never edits the vendor's
- own postgresql.conf/pg_hba.conf, and never creates or owns any
- application's database/schema. homelab-mailread, homelab-mailsend, and
- homelab-api each ship and apply their own migrations against whatever
- cluster this package stands up or adopts.
+ own postgresql.conf/pg_hba.conf. Creates one shared `homelab` database as
+ a substrate for other packages, but never creates or owns any
+ application's own schema/role within it. Ships
+ scripts/bootstrap-app-role.sh, a reusable tool other homelab-* packages'
+ installers call to create their own narrow role + schema (locally via
+ `sudo -u postgres`, over SSH to a remote DB host, or by printing the SQL
+ for a human to run by hand -- never a stored/network admin credential).
+ homelab-mailread, homelab-mailsend, and homelab-api each still ship and
+ apply their own migrations against whatever cluster this package stands
+ up or adopts.
