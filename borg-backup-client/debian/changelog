@@ -1,3 +1,18 @@
+homelab-borg-service-backup-client (0.2.5) unstable; urgency=medium
+
+  * Release v0.2.5
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 13:00:57 -0500
+
+homelab-borg-service-backup-client (0.2.5) unstable; urgency=medium
+
+  * Ship bash tab completion for the CLI (backup/check/list-archives/
+    restore/configure/setup and their flags), installed to
+    /usr/share/bash-completion/completions/, matching the server
+    package's completion support.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 10:00:00 -0500
+
 homelab-borg-service-backup-client (0.2.4) unstable; urgency=medium
 
   * Release v0.2.4

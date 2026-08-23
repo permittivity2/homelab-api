@@ -1,0 +1,81 @@
+# bash completion for homelab-borg-service-backup-client
+#
+# Subcommand names and per-command flags below are hand-kept in sync with
+# bin/homelab-borg-service-backup-client's argparse definitions (there is
+# no code-generation step) -- if a subcommand or flag is added there,
+# mirror it here too. See borg-backup-server/completions/ for the sibling
+# pattern this is modeled on.
+
+_homelab_borg_service_backup_client_commands="backup check list-archives restore configure setup"
+
+# Flags whose value is a local filesystem path, across all subcommands.
+_homelab_borg_service_backup_client_path_flags="--config --ssh-key --passphrase-file --target"
+
+_homelab_borg_service_backup_client_is_path_flag() {
+    local flag="$1" f
+    for f in $_homelab_borg_service_backup_client_path_flags; do
+        [[ "$flag" == "$f" ]] && return 0
+    done
+    return 1
+}
+
+_homelab_borg_service_backup_client_filecomplete() {
+    if declare -F _filedir >/dev/null 2>&1; then
+        _filedir
+    else
+        COMPREPLY=( $(compgen -f -- "$cur") )
+    fi
+}
+
+_homelab_borg_service_backup_client_completions() {
+    local cur prev command i word
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    if _homelab_borg_service_backup_client_is_path_flag "$prev"; then
+        _homelab_borg_service_backup_client_filecomplete
+        return 0
+    fi
+
+    # First non-flag word after the program name is the subcommand.
+    command=""
+    for (( i=1; i < COMP_CWORD; i++ )); do
+        word="${COMP_WORDS[i]}"
+        [[ "$word" == -* ]] && continue
+        command="$word"
+        break
+    done
+
+    if [[ -z "$command" ]]; then
+        COMPREPLY=( $(compgen -W "-h --help $_homelab_borg_service_backup_client_commands" -- "$cur") )
+        return 0
+    fi
+
+    local opts
+    case "$command" in
+        backup)
+            opts="--dry-run --once --config"
+            ;;
+        check)
+            opts="--config"
+            ;;
+        list-archives)
+            opts="--host --server --ssh-user --location --ssh-key --passphrase-file --config"
+            ;;
+        restore)
+            opts="--archive --target --paths --dry-run --host --server --ssh-user --location --ssh-key --passphrase-file --config"
+            ;;
+        configure|setup)
+            opts="--passphrase-file"
+            ;;
+        *)
+            opts=""
+            ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "-h --help $opts" -- "$cur") )
+    return 0
+}
+
+complete -F _homelab_borg_service_backup_client_completions homelab-borg-service-backup-client
