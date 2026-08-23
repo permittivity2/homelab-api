@@ -766,7 +766,9 @@ def build_parser():
 
     p_configure = sub.add_parser(
         "configure",
-        help="Interactively (re-)configure this host (Debian package installs only)",
+        aliases=["setup"],
+        help="Interactively (re-)configure this host (Debian package installs only); "
+             "also available as 'setup'",
     )
     p_configure.add_argument(
         "--passphrase-file",
@@ -776,7 +778,7 @@ def build_parser():
     return parser
 
 
-KNOWN_COMMANDS = {"backup", "check", "list-archives", "restore", "configure", "-h", "--help"}
+KNOWN_COMMANDS = {"backup", "check", "list-archives", "restore", "configure", "setup", "-h", "--help"}
 
 
 def normalize_argv(argv):
@@ -796,7 +798,7 @@ def main():
 
     setup_logging()
 
-    if args.command == "configure":
+    if args.command in ("configure", "setup"):
         cmd_configure(args)
         return
 

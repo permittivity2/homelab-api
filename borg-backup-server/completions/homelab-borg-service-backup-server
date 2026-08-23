@@ -1,0 +1,42 @@
+# bash completion for homelab-borg-service-backup-server
+#
+# Subcommand names and per-command flags below are hand-kept in sync with
+# homelab-borg-service-backup-server's argparse definitions (there is no
+# code-generation step) -- if a subcommand or flag is added there, mirror
+# it here too. See cli/completions/homelab-cli for the sibling pattern
+# this is modeled on.
+
+_homelab_borg_service_backup_server_commands="enroll list revoke admin-recovery-key"
+
+_homelab_borg_service_backup_server_completions() {
+    local cur prev command i word
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # First non-flag word after the program name is the subcommand.
+    command=""
+    for (( i=1; i < COMP_CWORD; i++ )); do
+        word="${COMP_WORDS[i]}"
+        [[ "$word" == -* ]] && continue
+        command="$word"
+        break
+    done
+
+    if [[ -z "$command" ]]; then
+        COMPREPLY=( $(compgen -W "-h --help $_homelab_borg_service_backup_server_commands" -- "$cur") )
+        return 0
+    fi
+
+    case "$command" in
+        admin-recovery-key)
+            COMPREPLY=( $(compgen -W "-h --help --backup-user --backup-location" -- "$cur") )
+            ;;
+        *)
+            COMPREPLY=( $(compgen -W "-h --help" -- "$cur") )
+            ;;
+    esac
+    return 0
+}
+
+complete -F _homelab_borg_service_backup_server_completions homelab-borg-service-backup-server

@@ -12,6 +12,8 @@ override_dh_install:
 		$(PKG)/usr/sbin/homelab-borg-service-backup-server
 	install -D -m 755 setup-admin-recovery-key.sh \
 		$(DATA_DIR)/setup-admin-recovery-key.sh
+	install -D -m 644 completions/homelab-borg-service-backup-server \
+		$(PKG)/usr/share/bash-completion/completions/homelab-borg-service-backup-server
 
 override_dh_auto_build:
 	# No build step needed for a couple of scripts

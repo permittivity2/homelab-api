@@ -19,11 +19,13 @@ or an entire server to a point in time after a disaster. It is not a
 user-data backup tool.
 .SH COMMANDS
 .TP
-.B configure
+.BR setup " (alias: " configure )
 Interactively (re-)configure this host: config values, an
 auto-generated per-host encryption passphrase, backup mode, schedule,
-and SSH trust to the backup server. Run this once after installing the
-package. Not available outside of a Debian package install (see
+and SSH trust to the backup server. Run this after installing the
+package, and safe to re-run any time afterward to change settings
+(existing values are left alone unless you choose to change them). Not
+available outside of a Debian package install (see
 .B install/install.sh
 in a git checkout instead).
 .TP
