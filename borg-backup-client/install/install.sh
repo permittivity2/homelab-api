@@ -544,6 +544,19 @@ bootstrap_database() {
     return 0
 }
 
+# Every homelab-* package that wants homelab_only mode to protect it
+# ships /usr/share/homelab-<pkgname>/backup-paths.txt (one path per
+# line, # comments and blank lines ignored) -- a directory dpkg already
+# fully owns (created on install, removed automatically on remove/
+# purge), so there's no separate registration/cleanup bookkeeping for
+# any package to maintain. This auto-discovers whatever's actually
+# installed on THIS host with no hardcoded per-package knowledge here,
+# and any future package participates just by shipping the file -- see
+# CLAUDE.md's "Standard pattern for a new package's Postgres role"
+# section for the sibling convention this mirrors. Packages with actual
+# data to dump (not just config) additionally ship an executable
+# backup-hook.sh -- see dump_databases() in the main script, which is
+# what actually runs those.
 populate_homelab_defaults() {
     local current_paths
     current_paths=$(cfg_get homelab_only.paths)
@@ -552,34 +565,28 @@ populate_homelab_defaults() {
         return
     fi
 
-    log "detecting installed homelab-* packages for default backup paths"
-    local paths=()
-    local have_api=0 have_processor=0
-    if dpkg -s homelab-api >/dev/null 2>&1; then
-        paths+=("/etc/homelab/api"); have_api=1
-    fi
-    if dpkg -s homelab-api-backend-processor >/dev/null 2>&1; then
-        paths+=("/etc/homelab/processor"); have_processor=1
-    fi
-    if dpkg -s homelab-drive-web-ui >/dev/null 2>&1; then
-        paths+=("/etc/homelab/drive-web-ui")
-    fi
-    if dpkg -s homelab-sso-ui >/dev/null 2>&1; then
-        paths+=("/etc/homelab/sso-ui")
-    fi
+    log "scanning /usr/share/homelab-*/backup-paths.txt for default backup paths"
+    local paths=() manifest line
+    declare -A seen=()
+    for manifest in /usr/share/homelab-*/backup-paths.txt; do
+        [ -f "$manifest" ] || continue
+        while IFS= read -r line; do
+            line="${line%%#*}"
+            line="$(echo "$line" | xargs)"
+            [ -n "$line" ] || continue
+            [ -n "${seen[$line]:-}" ] && continue
+            seen[$line]=1
+            paths+=("$line")
+        done < "$manifest"
+    done
 
     if [ "${#paths[@]}" -eq 0 ]; then
-        warn "no known homelab-* packages detected; leaving homelab_only.paths empty, edit $CONFIG manually"
+        warn "no homelab-*/backup-paths.txt manifests found; leaving homelab_only.paths empty, edit $CONFIG manually"
         return
     fi
 
     log "detected homelab paths: ${paths[*]}"
     cfg_set_list homelab_only.paths "${paths[@]}"
-
-    if [ "$have_api" -eq 1 ] || [ "$have_processor" -eq 1 ]; then
-        log "detected homelab-api/processor, defaulting to dumping the 'mailserver' database"
-        cfg_set_databases homelab_only.databases "postgres:mailserver:/var/lib/homelab-borg-service-backup-client/dumps"
-    fi
 }
 
 # Onboarding a client no longer involves the client SSHing into the

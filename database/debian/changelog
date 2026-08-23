@@ -1,3 +1,14 @@
+homelab-database (0.2.2) unstable; urgency=medium
+
+  * Ship backup-paths.txt (/etc/postgresql) and backup-hook.sh
+    (pg_dumpall, run as the postgres OS user -- no stored credential,
+    no per-app role/dbname coupling) for
+    homelab-borg-service-backup-client's homelab_only auto-discovery.
+    This is what any homelab-* package's Postgres data gets backed up
+    through, wherever this package is installed.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-database (0.2.1) unstable; urgency=medium
 
   * Fix bootstrap-app-role.sh: it previously created its own

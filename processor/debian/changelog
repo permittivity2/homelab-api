@@ -1,3 +1,10 @@
+homelab-api-backend-processor (0.1.16) unstable; urgency=medium
+
+  * Ship backup-paths.txt (/etc/homelab/processor) for
+    homelab-borg-service-backup-client's homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-api-backend-processor (0.1.15) unstable; urgency=medium
 
   * Release v0.1.15

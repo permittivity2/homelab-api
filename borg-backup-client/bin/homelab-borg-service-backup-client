@@ -4,6 +4,7 @@
 import argparse
 import contextlib
 import getpass
+import glob
 import json
 import logging
 import os
@@ -238,6 +239,43 @@ def dump_databases(config, dry_run):
         else:
             subprocess.run(cmd, check=True)
         dump_dirs.append(dump_dir)
+    return dump_dirs
+
+
+BACKUP_HOOK_GLOB = "/usr/share/homelab-*/backup-hook.sh"
+HOOK_DUMP_BASE_DIR = "/var/lib/homelab-borg-service-backup-client/dumps"
+
+
+def run_backup_hooks(dry_run):
+    """Runs every installed package's own /usr/share/homelab-<pkg>/
+    backup-hook.sh (if present and executable), each into its own
+    subdirectory of HOOK_DUMP_BASE_DIR. This is how a package with
+    actual data to protect (today, only homelab-database's pg_dumpall)
+    gets it backed up -- borg-backup-client never needs to know
+    anything Postgres/PowerDNS/etc.-specific itself. Returns the list of
+    per-hook output dirs, same shape as dump_databases()'s dump_dirs, so
+    both feed the same cleanup_dump_dirs() afterward. A failing hook is
+    logged and skipped, never fatal to the rest of the backup -- matches
+    the same non-fatal philosophy as the per-database pg_dump loop
+    above."""
+    dump_dirs = []
+    for hook in sorted(glob.glob(BACKUP_HOOK_GLOB)):
+        if not os.access(hook, os.X_OK):
+            continue
+        pkgname = os.path.basename(os.path.dirname(hook))
+        out_dir = os.path.join(HOOK_DUMP_BASE_DIR, pkgname)
+        os.makedirs(out_dir, exist_ok=True)
+        log.info("running backup hook %s -> %s", hook, out_dir)
+        if dry_run:
+            log.info("[dry-run] would run: %s %s", hook, out_dir)
+            dump_dirs.append(out_dir)
+            continue
+        try:
+            subprocess.run([hook, out_dir], check=True)
+        except subprocess.CalledProcessError as exc:
+            log.warning("backup hook %s failed, skipping: %s", hook, exc)
+            continue
+        dump_dirs.append(out_dir)
     return dump_dirs
 
 
@@ -536,7 +574,10 @@ def run_backup(config, dry_run):
     dump_dirs = []
     with heartbeat(f"{mode} backup for {identifier}"):
         try:
-            dump_dirs = dump_databases(config, dry_run) if mode == "homelab_only" else []
+            dump_dirs = (
+                dump_databases(config, dry_run) + run_backup_hooks(dry_run)
+                if mode == "homelab_only" else []
+            )
 
             sources, pattern_lines = build_sources_and_patterns(config, mode, dump_dirs)
             if not sources:

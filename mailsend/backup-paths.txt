@@ -1,0 +1,8 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# Unlike mailread/mail-proxy, Postfix has no native include mechanism --
+# this package's own changes are a sentinel block appended to the
+# vendor's own master.cf plus postconf -e edits to main.cf, so they
+# can't be isolated into their own file. Backing up the whole directory
+# is the practical choice here.
+/etc/postfix
+/etc/systemd/system/opendmarc.service.d/homelab-mailsend.conf

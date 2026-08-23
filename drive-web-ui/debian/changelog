@@ -1,3 +1,10 @@
+homelab-drive-web-ui (0.2.4) unstable; urgency=medium
+
+  * Ship backup-paths.txt (/etc/homelab/drive-web-ui) for
+    homelab-borg-service-backup-client's homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-drive-web-ui (0.2.3) unstable; urgency=medium
 
   * Release v0.2.3

@@ -1,3 +1,10 @@
+homelab-sso-ui (0.4.1) unstable; urgency=medium
+
+  * Ship backup-paths.txt (/etc/homelab/sso-ui) for
+    homelab-borg-service-backup-client's homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-sso-ui (0.4.0) unstable; urgency=medium
 
   * Release v0.4.0

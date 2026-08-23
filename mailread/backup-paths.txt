@@ -1,0 +1,10 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# Only the files this package itself writes, not all of /etc/dovecot
+# (which may hold unrelated hand-configured content on a shared host).
+/etc/dovecot/conf.d/90-homelab-mailread-auth.conf
+/etc/dovecot/conf.d/91-homelab-mailread-oauth2.conf
+/etc/dovecot/conf.d/92-homelab-mailread-mail.conf
+/etc/dovecot/conf.d/93-homelab-mailread-sieve.conf
+/etc/dovecot/conf.d/94-homelab-mailread-listeners.conf
+/etc/dovecot/dovecot-sql.conf.ext
+/etc/dovecot/dovecot-oauth2-homelab.conf.ext

@@ -9,6 +9,8 @@ override_dh_install:
 		debian/homelab-mailsend/usr/share/homelab-mailsend/{} \;
 	find migrations -type f -name '*.sql' -exec install -D -m 644 {} \
 		debian/homelab-mailsend/usr/share/homelab-mailsend/{} \;
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-mailsend/usr/share/homelab-mailsend/backup-paths.txt
 
 override_dh_auto_build:
 	# Nothing to compile

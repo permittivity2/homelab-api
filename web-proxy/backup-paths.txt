@@ -1,0 +1,6 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# The directory this package writes its homelab-<name>.conf vhosts
+# into (roundcube/api/drive/sso, whichever are configured) -- declared
+# as a directory rather than the individual filenames since not all
+# four are necessarily present on every host.
+/etc/nginx/sites-available

@@ -1,0 +1,6 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# Only this package's own managed files, never the rest of /etc/haproxy
+# (this package is designed to coexist with other frontends on a shared
+# proxy host, which are not its concern).
+/etc/haproxy/conf.d/90-homelab-mail-proxy.cfg
+/etc/systemd/system/haproxy.service.d/90-homelab-mail-proxy.conf

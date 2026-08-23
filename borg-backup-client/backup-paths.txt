@@ -1,0 +1,4 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+# Yes, this package backs up its own config too (encryption passphrase,
+# dedicated SSH key, run-tracking DB credentials if enabled).
+/etc/homelab/borgbackup

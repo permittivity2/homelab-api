@@ -9,6 +9,8 @@ override_dh_install:
 		debian/homelab-api-backend-processor/usr/bin/homelab-api-backend-processor
 	install -D -m 644 systemd/homelab-api-backend-processor.service \
 		debian/homelab-api-backend-processor/etc/systemd/system/homelab-api-backend-processor.service
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-api-backend-processor/usr/share/homelab-api-backend-processor/backup-paths.txt
 
 override_dh_auto_test:
 	# Skip tests during package build

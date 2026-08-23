@@ -17,3 +17,5 @@ override_dh_install:
 		debian/homelab-sso-ui/usr/share/homelab-sso-ui/{} \;
 	find config -type f -exec install -D -m 644 {} \
 		debian/homelab-sso-ui/usr/share/homelab-sso-ui/{} \;
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-sso-ui/usr/share/homelab-sso-ui/backup-paths.txt

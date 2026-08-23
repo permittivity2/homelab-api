@@ -5,6 +5,8 @@
 
 override_dh_install:
 	dh_install
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-web-proxy/usr/share/homelab-web-proxy/backup-paths.txt
 
 override_dh_auto_build:
 	# Nothing to compile

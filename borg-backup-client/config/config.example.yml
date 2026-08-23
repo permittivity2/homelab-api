@@ -70,12 +70,17 @@ specific:
 
 homelab_only:
   # Config directories/files for installed homelab-* services. install.sh
-  # pre-populates this by checking which homelab-* packages are installed;
-  # edit freely.
+  # auto-populates this from every installed package's own
+  # /usr/share/homelab-<pkg>/backup-paths.txt manifest -- no per-package
+  # knowledge lives in this tool itself; any homelab-* package
+  # participates just by shipping that file. Edit freely for anything
+  # extra beyond what was auto-detected.
   paths: []
-  # Databases to pg_dump into a staging directory before each backup, then
-  # include that directory as a backup source. The staging directory is
-  # cleaned up after the backup completes.
+  # Extra, manually-configured databases to pg_dump (in ADDITION to
+  # whatever /usr/share/homelab-*/backup-hook.sh scripts already ran --
+  # see homelab-database's hook, which pg_dumpall's the whole cluster
+  # automatically wherever homelab-database itself is installed). Use
+  # this only for an ad hoc dump not already covered by a hook.
   databases: []
   #  - type: postgres
   #    name: mailserver

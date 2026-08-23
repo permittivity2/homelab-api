@@ -1,3 +1,22 @@
+homelab-borg-service-backup-client (0.3.0) unstable; urgency=medium
+
+  * homelab_only mode no longer hardcodes per-package detection (which
+    triggered a `pg_dump mailserver` default off homelab-api/processor
+    merely being *installed*, and that pg_dump had no host/user at all,
+    so it always failed with `role "root" does not exist` running under
+    the systemd unit's `User=root`). populate_homelab_defaults() now
+    globs every installed package's own
+    /usr/share/homelab-<pkg>/backup-paths.txt for config paths to
+    include, and dump_databases() runs every
+    /usr/share/homelab-*/backup-hook.sh found (today, only
+    homelab-database's pg_dumpall) -- no hardcoded per-package knowledge
+    left in this tool at all; any future homelab-* package participates
+    just by shipping these files. The existing manual
+    homelab_only.paths/databases: config fields are untouched, purely
+    additive to this.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-borg-service-backup-client (0.2.9) unstable; urgency=medium
 
   * Fix: `apt remove` left a stale "Active: failed" status visible in

@@ -30,6 +30,8 @@ override_dh_install:
 		$(DATA_DIR)/systemd/homelab-borg-service-backup-client-check.timer.tmpl
 	install -D -m 644 completions/homelab-borg-service-backup-client \
 		$(PKG)/usr/share/bash-completion/completions/homelab-borg-service-backup-client
+	install -D -m 644 backup-paths.txt \
+		$(DATA_DIR)/backup-paths.txt
 
 override_dh_auto_build:
 	# No build step needed for a single Python script + shell installer

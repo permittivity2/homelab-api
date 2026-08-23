@@ -1,0 +1,2 @@
+# Read by homelab-borg-service-backup-client's homelab_only mode.
+/etc/powerdns/pdns.d/90-homelab-dns-server.conf

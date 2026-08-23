@@ -7,6 +7,8 @@ override_dh_install:
 	dh_install
 	install -D -m 644 pdns.d/90-homelab-dns-server.conf.template \
 		debian/homelab-dns-server/usr/share/homelab-dns-server/pdns.d/90-homelab-dns-server.conf.template
+	install -D -m 644 backup-paths.txt \
+		debian/homelab-dns-server/usr/share/homelab-dns-server/backup-paths.txt
 
 override_dh_auto_build:
 	# Nothing to compile

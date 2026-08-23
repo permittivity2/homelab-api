@@ -1,3 +1,10 @@
+homelab-dns-server (0.1.1) unstable; urgency=medium
+
+  * Ship backup-paths.txt (/etc/powerdns/pdns.d/90-homelab-dns-server.conf)
+    for homelab-borg-service-backup-client's homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-dns-server (0.1.0) unstable; urgency=medium
 
   * Initial release. PowerDNS gpgsql provisioning via the native pdns.d

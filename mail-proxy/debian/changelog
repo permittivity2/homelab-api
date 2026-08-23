@@ -1,3 +1,11 @@
+homelab-mail-proxy (0.1.1) unstable; urgency=medium
+
+  * Ship backup-paths.txt (this package's own conf.d file + systemd
+    drop-in only, never the rest of a shared proxy host's /etc/haproxy)
+    for homelab-borg-service-backup-client's homelab_only auto-discovery.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 18:00:00 -0500
+
 homelab-mail-proxy (0.1.0) unstable; urgency=medium
 
   * Initial release. HAProxy TCP passthrough for the 6 mail-related
