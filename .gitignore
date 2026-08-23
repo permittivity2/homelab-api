@@ -51,6 +51,13 @@ database/debian/files
 database/debian/*.substvars
 database/debian/*.debhelper.log
 database/debian/*.debhelper
+pgbouncer/debian/homelab-pgbouncer/
+pgbouncer/debian/.debhelper/
+pgbouncer/debian/debhelper-build-stamp
+pgbouncer/debian/files
+pgbouncer/debian/*.substvars
+pgbouncer/debian/*.debhelper.log
+pgbouncer/debian/*.debhelper
 mailread/debian/homelab-mailread/
 mailread/debian/.debhelper/
 mailread/debian/debhelper-build-stamp

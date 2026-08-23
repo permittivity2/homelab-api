@@ -1,0 +1,15 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	install -D -m 755 scripts/bootstrap-pgbouncer-entry.sh \
+		debian/homelab-pgbouncer/usr/share/homelab-pgbouncer/scripts/bootstrap-pgbouncer-entry.sh
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests

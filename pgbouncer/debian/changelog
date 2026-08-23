@@ -1,0 +1,40 @@
+homelab-pgbouncer (0.1.2) unstable; urgency=medium
+
+  * Fix: the 0.1.1 "verify port is listening, escalate to restart"
+    check was unreliable -- a stale bind on the WRONG address still
+    shows the port as listening, so it never actually escalated (caught
+    live: stayed on 127.0.0.1 despite listen_addr=* after a fresh
+    install). Restart decisions are now based on comparing the
+    previous vs. new listen_addr/listen_port values directly (restart
+    only when either changed, or on first activation) rather than
+    inspecting `ss` output.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 14:40:00 -0500
+
+homelab-pgbouncer (0.1.1) unstable; urgency=medium
+
+  * Fix: `systemctl reload pgbouncer` (SIGHUP) does not rebind
+    listen_addr/listen_port -- confirmed empirically that a fresh
+    install stayed bound to the vendor's stock pgbouncer.ini default
+    (listen_addr=localhost) even after our config was written and
+    reloaded, since pgbouncer itself had already started with the old
+    config before this package's postinst ran. Now verifies the
+    configured port is actually listening after reload and escalates to
+    a full restart if not, matching the same pattern already used for
+    HAProxy in homelab-mail-proxy.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 14:30:00 -0500
+
+homelab-pgbouncer (0.1.0) unstable; urgency=medium
+
+  * Initial release. Phase 2 of the cross-package Postgres role
+    strategy: configures PgBouncer (scram-sha-256, static userlist.txt)
+    in front of homelab-database's shared `homelab` database, via a
+    drop-in file activated through pgbouncer's native %include
+    directive. Ships scripts/bootstrap-pgbouncer-entry.sh for other
+    packages' installers to register a role's SCRAM secret without a
+    stored/network admin credential (local, SSH-remote, or manual
+    fallback -- same tiering as homelab-database's
+    bootstrap-app-role.sh).
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 15:00:00 -0500
