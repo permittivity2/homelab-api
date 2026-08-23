@@ -1,0 +1,287 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+CONF_D=/etc/haproxy/conf.d
+MARKER="$CONF_D/90-homelab-mail-proxy.cfg"
+DROPIN_DIR=/etc/systemd/system/haproxy.service.d
+DROPIN="$DROPIN_DIR/90-homelab-mail-proxy.conf"
+
+case "$1" in
+    configure)
+        echo "homelab-mail-proxy post-installation setup..."
+
+        db_get homelab-mail-proxy/dovecot_backend || true;             DOVECOT_IMAP="$RET"
+        db_get homelab-mail-proxy/dovecot_backend_ssl || true;         DOVECOT_IMAPS="$RET"
+        db_get homelab-mail-proxy/postfix_backend || true;             POSTFIX_SMTP="$RET"
+        db_get homelab-mail-proxy/postfix_backend_smtps || true;       POSTFIX_SMTPS="$RET"
+        db_get homelab-mail-proxy/postfix_backend_submission || true;  POSTFIX_SUBMISSION="$RET"
+        db_get homelab-mail-proxy/enable_roundcube_listener || true;   ENABLE_RC="${RET:-false}"
+        db_get homelab-mail-proxy/roundcube_backend || true;           RC_BACKEND="$RET"
+        db_get homelab-mail-proxy/rate_25 || true;      RATE_25="${RET:-30/30s}"
+        db_get homelab-mail-proxy/rate_465 || true;     RATE_465="${RET:-12/30s}"
+        db_get homelab-mail-proxy/rate_587 || true;     RATE_587="${RET:-8/30s}"
+        db_get homelab-mail-proxy/rate_10465 || true;   RATE_10465="${RET:-50/30s}"
+        db_get homelab-mail-proxy/rate_imap || true;    RATE_IMAP="${RET:-30/10s}"
+
+        # <conn>/<window> -> stick-table params (e.g. "30/30s" -> gt 30, expire 10m, window 30s)
+        rate_parts() {
+            CONNS="${1%%/*}"
+            WINDOW="${1##*/}"
+        }
+
+        # Pre-flight port-conflict check. A port already bound by OUR OWN
+        # haproxy (e.g. from a prior activation, on a re-run/reconfigure)
+        # is not a conflict -- our own reload/restart below will pick up
+        # the new config for it. Only a port bound by something ELSE is a
+        # real conflict (most commonly: Postfix/Dovecot colocated on the
+        # SAME host as this proxy, an atypical but possible deployment).
+        # Confirmed empirically twice: (1) a silent bind failure is worse
+        # than skipping -- HAProxy can start "successfully" with zero
+        # working listeners while a colocated Postfix quietly keeps
+        # answering the port directly, bypassing this package's rate-
+        # limiting/PROXY-protocol entirely with no visible error; (2) an
+        # earlier version of this check didn't exclude haproxy's own
+        # sockets and silently dropped an already-working frontend on
+        # every reconfigure. Skip (don't write) only a frontend whose
+        # port is occupied by something that ISN'T haproxy itself.
+        port_free() {
+            OWNER="$(ss -tlnp 2>/dev/null | awk -v p=":$1\$" '$4 ~ p {print $NF}')"
+            case "$OWNER" in
+                "") return 0 ;;
+                *haproxy*) return 0 ;;
+                *) return 1 ;;
+            esac
+        }
+
+        SKIPPED_PORTS=""
+        ACTIVATED_PORTS=""
+
+        mkdir -p "$CONF_D"
+        {
+            echo "# Managed by homelab-mail-proxy — do not hand-edit, edit debconf"
+            echo "# answers instead (dpkg-reconfigure homelab-mail-proxy). Never"
+            echo "# touches haproxy.cfg or any other frontend on a shared proxy host."
+
+            if [ -n "$POSTFIX_SMTP" ]; then
+                if port_free 25; then
+                    rate_parts "$RATE_25"
+                    echo ""
+                    echo "frontend homelab_smtp_in"
+                    echo "  bind 0.0.0.0:25"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 10m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_smtp_back"
+                    echo "backend homelab_smtp_back"
+                    echo "  mode tcp"
+                    echo "  server postfix $POSTFIX_SMTP send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 25"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 25"
+                fi
+            fi
+
+            if [ -n "$POSTFIX_SMTPS" ]; then
+                if port_free 465; then
+                    rate_parts "$RATE_465"
+                    echo ""
+                    echo "frontend homelab_smtps_in"
+                    echo "  bind 0.0.0.0:465"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 10m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_smtps_back"
+                    echo "backend homelab_smtps_back"
+                    echo "  mode tcp"
+                    echo "  server postfix $POSTFIX_SMTPS send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 465"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 465"
+                fi
+            fi
+
+            if [ -n "$POSTFIX_SUBMISSION" ]; then
+                if port_free 587; then
+                    rate_parts "$RATE_587"
+                    echo ""
+                    echo "frontend homelab_submission_in"
+                    echo "  bind 0.0.0.0:587"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 10m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_submission_back"
+                    echo "backend homelab_submission_back"
+                    echo "  mode tcp"
+                    echo "  server postfix $POSTFIX_SUBMISSION send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 587"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 587"
+                fi
+            fi
+
+            if [ "$ENABLE_RC" = "true" ] && [ -n "$RC_BACKEND" ]; then
+                if port_free 10465; then
+                    rate_parts "$RATE_10465"
+                    echo ""
+                    echo "frontend homelab_roundcube_smtps_in"
+                    echo "  bind 0.0.0.0:10465"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 10m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_roundcube_smtps_back"
+                    echo "backend homelab_roundcube_smtps_back"
+                    echo "  mode tcp"
+                    echo "  server postfix $RC_BACKEND send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 10465"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 10465"
+                fi
+            fi
+
+            if [ -n "$DOVECOT_IMAP" ]; then
+                if port_free 143; then
+                    rate_parts "$RATE_IMAP"
+                    echo ""
+                    echo "frontend homelab_imap_in"
+                    echo "  bind 0.0.0.0:143"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 5m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_imap_back"
+                    echo "backend homelab_imap_back"
+                    echo "  mode tcp"
+                    echo "  server dovecot $DOVECOT_IMAP send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 143"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 143"
+                fi
+            fi
+
+            if [ -n "$DOVECOT_IMAPS" ]; then
+                if port_free 993; then
+                    rate_parts "$RATE_IMAP"
+                    echo ""
+                    echo "frontend homelab_imaps_in"
+                    echo "  bind 0.0.0.0:993"
+                    echo "  mode tcp"
+                    echo "  stick-table type ip size 100k expire 5m store conn_rate($WINDOW)"
+                    echo "  tcp-request connection track-sc0 src"
+                    echo "  tcp-request connection reject if { sc0_conn_rate gt $CONNS }"
+                    echo "  default_backend homelab_imaps_back"
+                    echo "backend homelab_imaps_back"
+                    echo "  mode tcp"
+                    echo "  server dovecot $DOVECOT_IMAPS send-proxy"
+                    ACTIVATED_PORTS="$ACTIVATED_PORTS 993"
+                else
+                    SKIPPED_PORTS="$SKIPPED_PORTS 993"
+                fi
+            fi
+        } > "$MARKER"
+        echo "  wrote $MARKER"
+
+        if [ -n "$SKIPPED_PORTS" ]; then
+            echo ""
+            echo "WARNING: the following ports are already in use by something"
+            echo "         else on this host and were SKIPPED (no frontend written"
+            echo "         for them):$SKIPPED_PORTS"
+            echo "         This is expected if Postfix/Dovecot are colocated on"
+            echo "         this same host -- homelab-mail-proxy is designed to run"
+            echo "         on a separate proxy host fronting them, not alongside"
+            echo "         them. Re-run 'dpkg-reconfigure homelab-mail-proxy' after"
+            echo "         freeing the port(s) if this was unintended."
+            echo ""
+        fi
+
+        # --- Activate conf.d loading via a systemd EXTRAOPTS drop-in.
+        # NEVER edit /etc/default/haproxy -- verified empirically that
+        # doing so does not reliably work on a real HAProxy 3.2.x install
+        # (caused a reproducible crash-loop when combined with an
+        # EXTRAOPTS override). Read the CURRENT merged EXTRAOPTS (base
+        # unit's default the first time; our own drop-in's value on a
+        # later re-run) and only append "-f conf.d" if not already
+        # present -- idempotent across upgrades. ---
+        CURRENT_EXTRAOPTS="$(systemctl show haproxy -p Environment 2>/dev/null | sed -n 's/.*EXTRAOPTS=\(.*\)$/\1/p' | sed 's/^"//;s/"$//')"
+        case "$CURRENT_EXTRAOPTS" in
+            *"-f $CONF_D"*)
+                NEW_EXTRAOPTS="$CURRENT_EXTRAOPTS"
+                ;;
+            *)
+                NEW_EXTRAOPTS="${CURRENT_EXTRAOPTS:+$CURRENT_EXTRAOPTS }-f $CONF_D"
+                ;;
+        esac
+
+        mkdir -p "$DROPIN_DIR"
+        cat > "$DROPIN" <<EOF
+# Managed by homelab-mail-proxy — do not hand-edit.
+[Service]
+Environment="EXTRAOPTS=$NEW_EXTRAOPTS"
+EOF
+        systemctl daemon-reload
+
+        # port_listening PORT: is anything bound to this port right now?
+        port_listening() {
+            ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "[.:]$1\$"
+        }
+
+        # --- Validate before touching the service. ---
+        if haproxy -c -f /etc/haproxy/haproxy.cfg -f "$CONF_D" >/dev/null 2>&1; then
+            if systemctl is-active --quiet haproxy; then
+                # Reload first (the safe, connection-preserving path for
+                # the common case: an existing frontend's rate-limit or
+                # backend IP changed). Confirmed empirically that a
+                # reload on an already-long-lived master can silently
+                # fail to actually open a genuinely NEW port -- it logs
+                # "Loading success" and systemd reports "Reloaded" while
+                # the port never comes up. So: reload, then verify every
+                # port we just activated is actually listening; only if
+                # one is missing, escalate to a full restart (which DOES
+                # briefly drop connections -- accepted here because a
+                # silently-unbound configured port is a worse, invisible
+                # failure mode).
+                systemctl reload haproxy || true
+                MISSING_AFTER_RELOAD=""
+                for p in $ACTIVATED_PORTS; do
+                    port_listening "$p" || MISSING_AFTER_RELOAD="$MISSING_AFTER_RELOAD $p"
+                done
+                if [ -n "$MISSING_AFTER_RELOAD" ]; then
+                    echo "WARNING: reload reported success but these newly-configured"
+                    echo "         ports never actually came up:$MISSING_AFTER_RELOAD"
+                    echo "         Escalating to a full restart (confirmed empirically"
+                    echo "         that HAProxy's reload can silently fail to bind a"
+                    echo "         brand-new port on an already-running master) --"
+                    echo "         this WILL briefly drop existing connections."
+                    systemctl restart haproxy || echo "WARNING: haproxy restart also failed -- check 'systemctl status haproxy' by hand."
+                fi
+            else
+                systemctl enable haproxy >/dev/null 2>&1 || true
+                systemctl start haproxy || echo "WARNING: haproxy failed to start -- check 'systemctl status haproxy' / 'journalctl -xeu haproxy' by hand."
+            fi
+        else
+            echo "WARNING: 'haproxy -c' reports a config error -- NOT touching haproxy."
+            echo "         Run 'haproxy -c -f /etc/haproxy/haproxy.cfg -f $CONF_D' by hand."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-mail-proxy configured. $MARKER"
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

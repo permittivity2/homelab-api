@@ -1,0 +1,64 @@
+Template: homelab-mail-proxy/dovecot_backend
+Type: string
+Default:
+Description: Backend host:port for Dovecot IMAP (e.g. dovecot01:143):
+ Leave blank to skip the IMAP/IMAPS frontends entirely.
+
+Template: homelab-mail-proxy/dovecot_backend_ssl
+Type: string
+Default:
+Description: Backend host:port for Dovecot IMAPS (e.g. dovecot01:993):
+ Leave blank to skip the IMAPS frontend.
+
+Template: homelab-mail-proxy/postfix_backend
+Type: string
+Default:
+Description: Backend host:port for Postfix SMTP (e.g. mail03:25):
+ Leave blank to skip the SMTP frontend.
+
+Template: homelab-mail-proxy/postfix_backend_smtps
+Type: string
+Default:
+Description: Backend host:port for Postfix SMTPS (e.g. mail03:465):
+ Leave blank to skip the SMTPS frontend.
+
+Template: homelab-mail-proxy/postfix_backend_submission
+Type: string
+Default:
+Description: Backend host:port for Postfix Submission (e.g. mail03:587):
+ Leave blank to skip the Submission frontend.
+
+Template: homelab-mail-proxy/enable_roundcube_listener
+Type: boolean
+Default: false
+Description: Add the Roundcube-specific SMTPS frontend on port 10465?
+
+Template: homelab-mail-proxy/roundcube_backend
+Type: string
+Default:
+Description: Backend host:port for the Roundcube-specific SMTPS listener (10465):
+
+Template: homelab-mail-proxy/rate_25
+Type: string
+Default: 30/30s
+Description: Abuse rate limit for port 25 (connections/window):
+
+Template: homelab-mail-proxy/rate_465
+Type: string
+Default: 12/30s
+Description: Abuse rate limit for port 465 (connections/window):
+
+Template: homelab-mail-proxy/rate_587
+Type: string
+Default: 8/30s
+Description: Abuse rate limit for port 587 (connections/window):
+
+Template: homelab-mail-proxy/rate_10465
+Type: string
+Default: 50/30s
+Description: Abuse rate limit for port 10465 (connections/window):
+
+Template: homelab-mail-proxy/rate_imap
+Type: string
+Default: 30/10s
+Description: Abuse rate limit for IMAP/IMAPS ports (connections/window):

@@ -1,0 +1,16 @@
+Source: homelab-web-proxy
+Section: httpd
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-web-proxy
+Architecture: all
+Depends: ${misc:Depends}, nginx, certbot, python3-certbot-nginx, adduser
+Description: nginx reverse-proxy + TLS vhosts for the Homelab-api web family
+ Scoped only to Roundcube/homelab-api/homelab-drive-web-ui/homelab-sso-ui
+ subdomains -- one package-owned file per vhost in sites-available, never
+ touching any other site already on a shared host. TLS certs are
+ obtained via certbot only if not already present.

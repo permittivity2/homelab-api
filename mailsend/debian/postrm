@@ -1,0 +1,47 @@
+#!/bin/sh
+set -e
+
+MASTER_CF=/etc/postfix/master.cf
+
+case "$1" in
+    remove)
+        # Only undo what THIS package created. Never touch postfix itself,
+        # never remove main.cf keys we set via postconf -e (they're
+        # harmless pointers to now-missing lookup files, and postconf -e
+        # has no clean "unset" story that wouldn't risk touching a value
+        # an admin has since hand-edited) -- just remove the lookup files
+        # and our master.cf block.
+        rm -f /etc/postfix/pgsql-virtual-domains.cf /etc/postfix/pgsql-virtual-aliases.cf \
+              /etc/postfix/pgsql-recipient-access.cf /etc/postfix/pgsql-sender-login-maps.cf
+
+        if [ -f "$MASTER_CF" ]; then
+            sed -i '/# BEGIN homelab-mailsend managed listeners/,/# END homelab-mailsend managed listeners/d' "$MASTER_CF"
+        fi
+
+        rm -f /etc/systemd/system/opendmarc.service.d/homelab-mailsend.conf
+        rmdir /etc/systemd/system/opendmarc.service.d 2>/dev/null || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl restart opendmarc 2>/dev/null || true
+
+        if command -v postfix >/dev/null 2>&1 && postfix check >/dev/null 2>&1; then
+            systemctl reload postfix 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

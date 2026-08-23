@@ -1,0 +1,8 @@
+# Managed by homelab-mailsend — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-mailsend). Backs smtpd_sender_login_maps
+# + reject_authenticated_sender_login_mismatch.
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT sender_address FROM dovecot.allowed_sender_addresses WHERE sasl_username='%s'

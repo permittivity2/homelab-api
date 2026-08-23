@@ -1,0 +1,10 @@
+homelab-dns-server (0.1.0) unstable; urgency=medium
+
+  * Initial release. PowerDNS gpgsql provisioning via the native pdns.d
+    drop-in directory (never edits pdns.conf), master/slave role toggle
+    matching the real live topology, applies the official upstream
+    schema (referenced from the installed pdns-backend-pgsql package)
+    only if not already present, never touches the dkim_keys table
+    living in the same database.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 07:00:00 -0500

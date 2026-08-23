@@ -1,0 +1,9 @@
+homelab-database (0.1.0) unstable; urgency=medium
+
+  * Initial release. Generic PostgreSQL provisioning/hardening substrate:
+    drop-in conf.d/pg_hba.conf.d config only (never edits vendor files
+    directly beyond a single idempotent, sentinel-guarded `include_dir`
+    activation line), adopt-existing-cluster detection, opt-in nightly
+    pg_dump backup.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 02:00:00 -0500

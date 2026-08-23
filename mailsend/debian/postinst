@@ -1,0 +1,190 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-mailsend
+MIGRATIONS_DIR="$SHARE_DIR/migrations"
+MARKER=/etc/postfix/pgsql-virtual-domains.cf
+MASTER_CF=/etc/postfix/master.cf
+
+case "$1" in
+    configure)
+        echo "homelab-mailsend post-installation setup..."
+
+        db_get homelab-mailsend/db_host || true;              DB_HOST="${RET:-localhost}"
+        db_get homelab-mailsend/db_port || true;              DB_PORT="${RET:-5432}"
+        db_get homelab-mailsend/db_name || true;              DB_NAME="${RET:-mailserver}"
+        db_get homelab-mailsend/db_user || true;              DB_USER="${RET:-dovecot_user}"
+        db_get homelab-mailsend/db_password || true;          DB_PASS="$RET"
+        db_get homelab-mailsend/domains || true;              DOMAINS="$RET"
+        db_get homelab-mailsend/dovecot_host || true;         DOVECOT_HOST="${RET:-localhost}"
+        db_get homelab-mailsend/dovecot_sasl_mode || true;    SASL_MODE="${RET:-local}"
+        db_get homelab-mailsend/dovecot_lmtp_port || true;    LMTP_PORT="${RET:-24}"
+        db_get homelab-mailsend/enable_roundcube_listener || true; ENABLE_RC="${RET:-false}"
+        db_get homelab-mailsend/behind_proxy || true;         BEHIND_PROXY="${RET:-false}"
+        db_get homelab-mailsend/dkim_milter_address || true;  DKIM_ADDR="$RET"
+        db_get homelab-mailsend/manage_master_cf_listeners || true; MANAGE_LISTENERS="${RET:-false}"
+
+        render() {
+            sed \
+                -e "s#__DB_HOST__#$DB_HOST#g" \
+                -e "s#__DB_PORT__#$DB_PORT#g" \
+                -e "s#__DB_NAME__#$DB_NAME#g" \
+                -e "s#__DB_USER__#$DB_USER#g" \
+                -e "s#__DB_PASS__#$DB_PASS#g" \
+                "$SHARE_DIR/pgsql/$1" > "$2"
+            chmod 640 "$2"
+            chgrp postfix "$2" 2>/dev/null || true
+        }
+
+        render pgsql-virtual-domains.cf.template /etc/postfix/pgsql-virtual-domains.cf
+        render pgsql-virtual-aliases.cf.template /etc/postfix/pgsql-virtual-aliases.cf
+        render pgsql-recipient-access.cf.template /etc/postfix/pgsql-recipient-access.cf
+        render pgsql-sender-login-maps.cf.template /etc/postfix/pgsql-sender-login-maps.cf
+        echo "  wrote /etc/postfix/pgsql-*.cf lookup maps"
+
+        # --- main.cf: idempotent, additive-only postconf -e for a fixed,
+        # enumerated key list. Never touches any other key. ---
+        postconf -e "virtual_mailbox_domains=pgsql:/etc/postfix/pgsql-virtual-domains.cf"
+        postconf -e "virtual_alias_maps=pgsql:/etc/postfix/pgsql-virtual-aliases.cf"
+        postconf -e "smtpd_sender_login_maps=pgsql:/etc/postfix/pgsql-sender-login-maps.cf"
+        postconf -e "virtual_transport=lmtp:inet:$DOVECOT_HOST:$LMTP_PORT"
+
+        if [ "$SASL_MODE" = "inet" ]; then
+            postconf -e "smtpd_sasl_path=inet:$DOVECOT_HOST:12345"
+        else
+            postconf -e "smtpd_sasl_path=private/auth"
+        fi
+        postconf -e "smtpd_sasl_type=dovecot"
+        postconf -e "smtpd_sasl_auth_enable=yes"
+
+        # smtpd_recipient_restrictions is a compound, ordered list -- never
+        # blind-overwrite. Append our required tokens only if missing,
+        # before any trailing catch-all, preserving whatever hand-added
+        # anti-spam rules already exist.
+        CURRENT_RESTRICTIONS="$(postconf -h smtpd_recipient_restrictions 2>/dev/null || true)"
+        NEW_RESTRICTIONS="$CURRENT_RESTRICTIONS"
+        case "$NEW_RESTRICTIONS" in
+            *check_recipient_access\ pgsql:/etc/postfix/pgsql-recipient-access.cf*) ;;
+            *) NEW_RESTRICTIONS="check_recipient_access pgsql:/etc/postfix/pgsql-recipient-access.cf, $NEW_RESTRICTIONS" ;;
+        esac
+        case "$NEW_RESTRICTIONS" in
+            *reject_authenticated_sender_login_mismatch*) ;;
+            *) NEW_RESTRICTIONS="reject_authenticated_sender_login_mismatch, $NEW_RESTRICTIONS" ;;
+        esac
+        if [ "$NEW_RESTRICTIONS" != "$CURRENT_RESTRICTIONS" ]; then
+            postconf -e "smtpd_recipient_restrictions=$NEW_RESTRICTIONS"
+        fi
+
+        # --- DKIM/DMARC milters, DKIM first. Skip DKIM entirely if the
+        # admin left the address blank (no signer configured/wanted). ---
+        MILTERS=""
+        if [ -n "$DKIM_ADDR" ]; then
+            MILTERS="$DKIM_ADDR"
+        fi
+        MILTERS="${MILTERS:+$MILTERS }inet:localhost:8893"
+        postconf -e "smtpd_milters=$MILTERS"
+        postconf -e "non_smtpd_milters=$MILTERS"
+        postconf -e "milter_default_action=accept"
+
+        # --- OpenDMARC: never edit /etc/opendmarc.conf. Override just the
+        # listening socket via a systemd ExecStart drop-in + opendmarc's
+        # own -p flag, matching the inet:localhost:8893 address wired
+        # above (production's own convention, not the package default
+        # unix socket). ---
+        mkdir -p /etc/systemd/system/opendmarc.service.d
+        cat > /etc/systemd/system/opendmarc.service.d/homelab-mailsend.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/opendmarc -p inet:8893@127.0.0.1
+EOF
+        systemctl daemon-reload
+
+        # --- master.cf: only insert our managed block when postinst's own
+        # earlier scan (via debian.config) found nothing conflicting. ---
+        if [ "$MANAGE_LISTENERS" = "true" ] && ! grep -q "# BEGIN homelab-mailsend managed listeners" "$MASTER_CF" 2>/dev/null; then
+            {
+                echo ""
+                echo "# BEGIN homelab-mailsend managed listeners"
+                echo "submission inet n       -       y       -       -       smtpd"
+                echo "  -o syslog_name=postfix/submission"
+                echo "  -o smtpd_tls_security_level=encrypt"
+                echo "  -o smtpd_sasl_auth_enable=yes"
+                echo "smtps     inet  n       -       y       -       -       smtpd"
+                echo "  -o syslog_name=postfix/smtps"
+                echo "  -o smtpd_tls_wrappermode=yes"
+                echo "  -o smtpd_sasl_auth_enable=yes"
+                if [ "$ENABLE_RC" = "true" ]; then
+                    echo "10465     inet  n       -       y       -       -       smtpd"
+                    echo "  -o syslog_name=postfix/roundcube-smtps"
+                    echo "  -o smtpd_tls_wrappermode=yes"
+                    echo "  -o smtpd_sasl_auth_enable=yes"
+                    echo "  -o smtpd_sender_login_maps=pgsql:/etc/postfix/pgsql-sender-login-maps.cf"
+                fi
+                echo "# END homelab-mailsend managed listeners"
+            } >> "$MASTER_CF"
+            echo "  activated managed listener block in $MASTER_CF"
+        elif [ "$MANAGE_LISTENERS" != "true" ]; then
+            echo ""
+            echo "NOTICE: not adding a submission/smtps listener block to"
+            echo "        $MASTER_CF -- an existing one was already detected."
+            echo "        Review it by hand; re-run 'dpkg-reconfigure"
+            echo "        homelab-mailsend' if you want this package to manage"
+            echo "        it instead (only safe once the existing one is removed)."
+            echo ""
+        fi
+
+        # --- Migrations: every configure, not just first install. ---
+        if command -v psql >/dev/null 2>&1 && [ -d "$MIGRATIONS_DIR" ]; then
+            echo "Applying database schema migrations..."
+            for f in "$MIGRATIONS_DIR"/*.sql; do
+                [ -f "$f" ] || continue
+                if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                        -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>&1; then
+                    echo "  applied $(basename "$f")"
+                else
+                    echo "  WARNING: failed to apply $(basename "$f") — check connectivity/permissions and re-run by hand."
+                fi
+            done
+        fi
+
+        # --- Validate before touching Postfix. Reload only, never
+        # restart-on-failure (same rationale as homelab-mailread). ---
+        if postfix check >/dev/null 2>&1; then
+            if systemctl is-active --quiet postfix; then
+                systemctl reload postfix || echo "WARNING: postfix reload failed -- NOT restarting automatically. Check 'postfix check' / 'systemctl status postfix' by hand."
+            else
+                systemctl enable postfix >/dev/null 2>&1 || true
+                systemctl start postfix || echo "WARNING: postfix failed to start -- check 'systemctl status postfix' by hand."
+            fi
+        else
+            echo "WARNING: 'postfix check' reports a config error -- NOT touching Postfix."
+            echo "         Run 'postfix check' by hand to see the error; the previous"
+            echo "         running config (if any) is untouched."
+        fi
+
+        # OpenDMARC's socket only takes effect on a real process restart
+        # (a listening-socket change isn't something SIGUSR1's reload
+        # picks up) -- lower blast radius than Postfix/Dovecot (DMARC
+        # validation pausing briefly doesn't stop mail flow, since
+        # milter_default_action=accept), so a restart here is acceptable.
+        systemctl restart opendmarc || echo "WARNING: opendmarc restart failed -- check 'systemctl status opendmarc' by hand."
+
+        db_stop
+
+        echo ""
+        echo "homelab-mailsend configured (domains: ${DOMAINS:-<none set>})."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

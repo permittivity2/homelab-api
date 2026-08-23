@@ -1,0 +1,18 @@
+Source: homelab-database
+Section: database
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-database
+Architecture: all
+Depends: ${misc:Depends}, postgresql, postgresql-client, adduser
+Description: Generic PostgreSQL provisioning/hardening substrate for Homelab
+ Ensures a properly configured, network-reachable, secured PostgreSQL
+ cluster exists, via drop-in config files only -- never edits the vendor's
+ own postgresql.conf/pg_hba.conf, and never creates or owns any
+ application's database/schema. homelab-mailread, homelab-mailsend, and
+ homelab-api each ship and apply their own migrations against whatever
+ cluster this package stands up or adopts.

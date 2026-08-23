@@ -1,0 +1,11 @@
+homelab-mailsend (0.1.0) unstable; urgency=medium
+
+  * Initial release. Postfix provisioning: PostgreSQL-backed virtual
+    domain/alias/recipient-access/sender-login-maps lookups, SASL
+    delegation to Dovecot (local socket or cross-host inet), DKIM
+    (OpenDKIM by default, matching production) then DMARC (OpenDMARC)
+    milter wiring, idempotent postconf -e main.cf keys, a pre-checked
+    sentinel-guarded master.cf listener block that refuses to insert over
+    an already-existing hand-written submission/smtps listener.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 04:00:00 -0500

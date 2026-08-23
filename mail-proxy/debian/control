@@ -1,0 +1,17 @@
+Source: homelab-mail-proxy
+Section: net
+Priority: optional
+Maintainer: Jeff Gardner <mailmasker-api01@forge.name>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.2
+Homepage: https://github.com/permittivity2/homelab-api
+
+Package: homelab-mail-proxy
+Architecture: all
+Depends: ${misc:Depends}, haproxy (>= 2.4), adduser
+Description: HAProxy TCP passthrough frontends for the Homelab mail stack
+ Templated frontends/backends for SMTP(25)/SMTPS(465)/Submission(587)/
+ Roundcube-SMTPS(10465, optional)/IMAP(143)/IMAPS(993), safe to install
+ on a shared proxy host without touching other frontends: config is a
+ drop-in file plus a systemd EXTRAOPTS override, never editing
+ haproxy.cfg or /etc/default/haproxy.

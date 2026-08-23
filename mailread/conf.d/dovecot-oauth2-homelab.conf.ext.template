@@ -1,0 +1,8 @@
+# Managed by homelab-mailread — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-mailread). See homelab-api issue
+# #012/#015 for the introspection mechanism this depends on.
+introspection_url = __INTROSPECTION_URL__
+introspection_mode = post
+active_attribute = active
+username_attribute = username
+tls_verify = yes

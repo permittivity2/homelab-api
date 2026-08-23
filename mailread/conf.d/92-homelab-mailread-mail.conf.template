@@ -1,0 +1,11 @@
+# Managed by homelab-mailread — do not hand-edit.
+mail_location = maildir:__MAILDIR_BASE__/%d/%n
+mail_uid = vmail
+mail_gid = vmail
+first_valid_uid = 5000
+first_valid_gid = 5000
+
+mail_plugins = $mail_plugins quota
+plugin {
+  quota = maildir:User quota
+}

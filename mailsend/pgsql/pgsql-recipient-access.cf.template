@@ -1,0 +1,7 @@
+# Managed by homelab-mailsend — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-mailsend).
+hosts = __DB_HOST__:__DB_PORT__
+user = __DB_USER__
+password = __DB_PASS__
+dbname = __DB_NAME__
+query = SELECT action FROM dovecot.postfix_recipient_access WHERE recipient='%s'

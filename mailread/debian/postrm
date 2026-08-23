@@ -1,0 +1,40 @@
+#!/bin/sh
+set -e
+
+CONF_D=/etc/dovecot/conf.d
+
+case "$1" in
+    remove)
+        # Only remove files THIS package created -- never dovecot itself,
+        # never mail data, never the vmail user (it may own live Maildir
+        # data on disk even after this package is removed).
+        for f in 90-homelab-mailread-auth.conf 91-homelab-mailread-oauth2.conf \
+                 92-homelab-mailread-mail.conf 93-homelab-mailread-sieve.conf \
+                 94-homelab-mailread-listeners.conf; do
+            rm -f "$CONF_D/$f" "$CONF_D/$f.recommended"
+        done
+        rm -f /etc/dovecot/dovecot-sql.conf.ext /etc/dovecot/dovecot-sql.conf.ext.recommended
+        rm -f /etc/dovecot/dovecot-oauth2-homelab.conf.ext /etc/dovecot/dovecot-oauth2-homelab.conf.ext.recommended
+
+        if command -v doveconf >/dev/null 2>&1 && doveconf >/dev/null 2>&1; then
+            systemctl reload dovecot 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,65 @@
+Template: homelab-mailread/db_host
+Type: string
+Default: localhost
+Description: PostgreSQL host for the dovecot.users table:
+
+Template: homelab-mailread/db_port
+Type: string
+Default: 5432
+Description: PostgreSQL port:
+
+Template: homelab-mailread/db_name
+Type: string
+Default: mailserver
+Description: PostgreSQL database name:
+
+Template: homelab-mailread/db_user
+Type: string
+Default: dovecot_user
+Description: PostgreSQL role to connect as:
+
+Template: homelab-mailread/db_password
+Type: password
+Description: PostgreSQL role password:
+
+Template: homelab-mailread/maildir_base_path
+Type: string
+Default: /var/mail/vhosts
+Description: Base path for Maildir storage:
+ Mailboxes are stored at <base>/<domain>/<username>, owned by a vmail
+ system user (UID/GID 5000, created if absent, matching production).
+
+Template: homelab-mailread/introspection_url
+Type: string
+Default: https://api.mailmasker.org/api/v1/auth/introspect
+Description: homelab-api JWT introspection URL (for the OAuth2 passdb):
+
+Template: homelab-mailread/behind_proxy
+Type: boolean
+Default: false
+Description: Is this host fronted by HAProxy (PROXY protocol)?
+ Enable only if a homelab-mail-proxy (or equivalent) HAProxy instance
+ terminates PROXY protocol in front of this host's IMAP/IMAPS listeners.
+ Leave disabled for a standalone/test install.
+
+Template: homelab-mailread/expose_sasl_auth_inet
+Type: boolean
+Default: false
+Description: Expose the SASL auth service on a TCP port (12345) for a remote Postfix?
+ Enable only if homelab-mailsend runs on a DIFFERENT host and needs
+ cross-host SASL delegation (matching current production topology).
+ Leave disabled if Postfix is co-located on this same host, or absent.
+
+Template: homelab-mailread/sieve_global_script_path
+Type: string
+Default:
+Description: Path to a global pre-delivery Sieve script (optional):
+ Leave blank for none.
+
+Template: homelab-mailread/force_overwrite_detected_config
+Type: boolean
+Default: false
+Description: Existing hand-configured Dovecot SQL/OAuth2 auth was detected -- overwrite anyway?
+ Decline (recommended on an already-hand-configured host) to install this
+ package's config as *.recommended files alongside the running
+ hand-configured setup instead of activating them.
