@@ -1,0 +1,47 @@
+Template: homelab-web-proxy/roundcube_domain
+Type: string
+Default:
+Description: Domain for Roundcube webmail (leave blank to skip):
+
+Template: homelab-web-proxy/roundcube_backend
+Type: string
+Default:
+Description: Backend host:port for Roundcube:
+
+Template: homelab-web-proxy/api_domain
+Type: string
+Default:
+Description: Domain for homelab-api (leave blank to skip):
+
+Template: homelab-web-proxy/api_backend
+Type: string
+Default:
+Description: Backend host:port for homelab-api:
+
+Template: homelab-web-proxy/drive_domain
+Type: string
+Default:
+Description: Domain for homelab-drive-web-ui (leave blank to skip):
+
+Template: homelab-web-proxy/drive_backend
+Type: string
+Default:
+Description: Backend host:port for homelab-drive-web-ui:
+
+Template: homelab-web-proxy/sso_domain
+Type: string
+Default:
+Description: Domain for homelab-sso-ui (leave blank to skip):
+
+Template: homelab-web-proxy/sso_backend
+Type: string
+Default:
+Description: Backend host:port for homelab-sso-ui:
+
+Template: homelab-web-proxy/enable_certbot
+Type: boolean
+Default: true
+Description: Automatically obtain TLS certs via certbot for configured domains?
+ Only runs certbot for a domain if no certificate already exists for it
+ (protects already-issued production certs). Disable for a standalone
+ test install with no real, publicly-resolvable domain.

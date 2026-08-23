@@ -1,0 +1,101 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SITES_AVAILABLE=/etc/nginx/sites-available
+SITES_ENABLED=/etc/nginx/sites-enabled
+
+case "$1" in
+    configure)
+        echo "homelab-web-proxy post-installation setup..."
+
+        db_get homelab-web-proxy/roundcube_domain || true;  RC_DOMAIN="$RET"
+        db_get homelab-web-proxy/roundcube_backend || true; RC_BACKEND="$RET"
+        db_get homelab-web-proxy/api_domain || true;        API_DOMAIN="$RET"
+        db_get homelab-web-proxy/api_backend || true;       API_BACKEND="$RET"
+        db_get homelab-web-proxy/drive_domain || true;      DRIVE_DOMAIN="$RET"
+        db_get homelab-web-proxy/drive_backend || true;     DRIVE_BACKEND="$RET"
+        db_get homelab-web-proxy/sso_domain || true;        SSO_DOMAIN="$RET"
+        db_get homelab-web-proxy/sso_backend || true;       SSO_BACKEND="$RET"
+        db_get homelab-web-proxy/enable_certbot || true;    ENABLE_CERTBOT="${RET:-true}"
+
+        write_vhost() {
+            # write_vhost <name> <domain> <backend>
+            NAME="$1"; DOMAIN="$2"; BACKEND="$3"
+            [ -n "$DOMAIN" ] && [ -n "$BACKEND" ] || return 0
+
+            cat > "$SITES_AVAILABLE/homelab-$NAME.conf" <<EOF
+# Managed by homelab-web-proxy — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-web-proxy). Never touches any other
+# site already on a shared host.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+
+    location / {
+        proxy_pass http://$BACKEND;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+}
+EOF
+            ln -sf "$SITES_AVAILABLE/homelab-$NAME.conf" "$SITES_ENABLED/homelab-$NAME.conf"
+            echo "  wrote $SITES_AVAILABLE/homelab-$NAME.conf"
+
+            if [ "$ENABLE_CERTBOT" = "true" ] && [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+                if nginx -t >/dev/null 2>&1; then
+                    systemctl reload nginx || true
+                    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+                        -m "root@$DOMAIN" --redirect \
+                        || echo "  WARNING: certbot failed for $DOMAIN -- serving HTTP only until run by hand."
+                else
+                    echo "  WARNING: nginx -t failed before certbot could run for $DOMAIN -- skipping certbot."
+                fi
+            elif [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
+                echo "  cert already exists for $DOMAIN -- not re-issuing"
+            fi
+        }
+
+        write_vhost roundcube "$RC_DOMAIN" "$RC_BACKEND"
+        write_vhost api "$API_DOMAIN" "$API_BACKEND"
+        write_vhost drive "$DRIVE_DOMAIN" "$DRIVE_BACKEND"
+        write_vhost sso "$SSO_DOMAIN" "$SSO_BACKEND"
+
+        # --- Validate the WHOLE config before any reload -- nginx has no
+        # per-vhost isolation check, so a mistake in any one vhost (ours
+        # or a pre-existing unrelated one) must never take down the other
+        # sites sharing this host. ---
+        if nginx -t >/dev/null 2>&1; then
+            if systemctl is-active --quiet nginx; then
+                systemctl reload nginx || echo "WARNING: nginx reload failed -- NOT restarting automatically. Check 'systemctl status nginx' by hand."
+            else
+                systemctl enable nginx >/dev/null 2>&1 || true
+                systemctl start nginx || echo "WARNING: nginx failed to start -- check 'systemctl status nginx' by hand."
+            fi
+        else
+            echo "WARNING: 'nginx -t' reports a config error -- NOT touching nginx."
+            echo "         Run 'nginx -t' by hand to see the error; the previous"
+            echo "         running config (if any) is untouched."
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-web-proxy configured."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+SITES_AVAILABLE=/etc/nginx/sites-available
+SITES_ENABLED=/etc/nginx/sites-enabled
+
+case "$1" in
+    remove)
+        # Only remove files THIS package created -- never any other site
+        # already on a shared host, never TLS certs (a real, potentially
+        # rate-limited Let's Encrypt issuance shouldn't be silently
+        # thrown away by a package removal).
+        for name in roundcube api drive sso; do
+            rm -f "$SITES_ENABLED/homelab-$name.conf"
+            rm -f "$SITES_AVAILABLE/homelab-$name.conf"
+        done
+
+        if command -v nginx >/dev/null 2>&1 && nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx 2>/dev/null || true
+        fi
+        ;;
+
+    purge)
+        if [ -f /usr/share/debconf/confmodule ]; then
+            . /usr/share/debconf/confmodule
+            db_purge || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
