@@ -1,0 +1,18 @@
+# Managed by homelab-mailread — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-mailread).
+driver = pgsql
+connect = host=__DB_HOST__ port=__DB_PORT__ dbname=__DB_NAME__ user=__DB_USER__ password=__DB_PASS__
+default_pass_scheme = SHA512-CRYPT
+
+password_query = \
+  SELECT username, domain, password \
+  FROM dovecot.users WHERE username = '%n' AND domain = '%d' AND active = 'Y'
+
+user_query = \
+  SELECT '__MAILDIR_BASE__/%d/%n' AS home, \
+         'maildir:__MAILDIR_BASE__/%d/%n' AS mail, \
+         5000 AS uid, 5000 AS gid, \
+         concat('*:storage=', COALESCE(quota_mb, 1024), 'M') AS userdb_quota_rule \
+  FROM dovecot.users WHERE username = '%n' AND domain = '%d' AND active = 'Y'
+
+iterate_query = SELECT username, domain FROM dovecot.users WHERE active = 'Y'

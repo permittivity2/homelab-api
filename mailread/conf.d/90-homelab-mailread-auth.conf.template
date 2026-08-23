@@ -1,0 +1,15 @@
+# Managed by homelab-mailread — do not hand-edit, edit debconf answers
+# instead (dpkg-reconfigure homelab-mailread) and let postinst regenerate
+# this file. Never touches any vendor-shipped conf.d file.
+disable_plaintext_auth = yes
+auth_mechanisms = plain login xoauth2 oauthbearer
+
+passdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}
+
+userdb {
+  driver = sql
+  args = /etc/dovecot/dovecot-sql.conf.ext
+}

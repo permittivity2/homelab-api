@@ -1,0 +1,10 @@
+homelab-mailread (0.1.0) unstable; urgency=medium
+
+  * Initial release. Dovecot IMAP/LMTP/ManageSieve provisioning: SQL
+    passdb/userdb against dovecot.users, homelab-api OAuth2 introspection
+    passdb, Maildir storage + quota, Sieve, drop-in-only config (never
+    edits vendor Dovecot files), doveconf -n pre-check that refuses to
+    auto-activate over existing hand-configured auth, Dovecot 2.3.x
+    version guard.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 03:00:00 -0500

@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	find conf.d -type f -exec install -D -m 644 {} \
+		debian/homelab-mailread/usr/share/homelab-mailread/{} \;
+	find migrations -type f -name '*.sql' -exec install -D -m 644 {} \
+		debian/homelab-mailread/usr/share/homelab-mailread/{} \;
+
+override_dh_auto_build:
+	# Nothing to compile
+
+override_dh_auto_test:
+	# No package-build-time tests

@@ -1,0 +1,197 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+SHARE_DIR=/usr/share/homelab-mailread
+CONF_D=/etc/dovecot/conf.d
+MARKER="$CONF_D/90-homelab-mailread-auth.conf"
+MIGRATIONS_DIR="$SHARE_DIR/migrations"
+
+case "$1" in
+    configure)
+        echo "homelab-mailread post-installation setup..."
+
+        # --- Version guard: 2.3.x config syntax only (see debian/control
+        # and the plan doc for why 2.4.x's genuinely different config DSL
+        # isn't supported yet). ---
+        DOVE_VER="$(dovecot --version 2>/dev/null | awk '{print $1}')"
+        case "$DOVE_VER" in
+            2.3.*)
+                ;;
+            *)
+                echo ""
+                echo "WARNING: unsupported Dovecot version '$DOVE_VER' detected."
+                echo "         This package's config templates target Dovecot 2.3.x"
+                echo "         syntax, matching current production. Dovecot 2.4.x"
+                echo "         changed the config DSL significantly (passdb block"
+                echo "         syntax, default_password_scheme rename, restructured"
+                echo "         SQL connection params) and isn't supported yet."
+                echo "         Nothing has been written. Package installed but inert."
+                echo ""
+                exit 0
+                ;;
+        esac
+
+        db_get homelab-mailread/db_host || true;              DB_HOST="${RET:-localhost}"
+        db_get homelab-mailread/db_port || true;              DB_PORT="${RET:-5432}"
+        db_get homelab-mailread/db_name || true;              DB_NAME="${RET:-mailserver}"
+        db_get homelab-mailread/db_user || true;              DB_USER="${RET:-dovecot_user}"
+        db_get homelab-mailread/db_password || true;          DB_PASS="$RET"
+        db_get homelab-mailread/maildir_base_path || true;    MAILDIR_BASE="${RET:-/var/mail/vhosts}"
+        db_get homelab-mailread/introspection_url || true;    INTROSPECTION_URL="$RET"
+        db_get homelab-mailread/behind_proxy || true;         BEHIND_PROXY="${RET:-false}"
+        db_get homelab-mailread/expose_sasl_auth_inet || true; EXPOSE_SASL_INET="${RET:-false}"
+        db_get homelab-mailread/sieve_global_script_path || true; SIEVE_GLOBAL="$RET"
+        db_get homelab-mailread/force_overwrite_detected_config || true; FORCE_OVERWRITE="${RET:-false}"
+
+        # --- vmail system user (UID/GID 5000, matching production) --
+        # dovecot-core's own Debian package provides no virtual-mailbox
+        # storage account -- this is a legitimate, narrow exception to
+        # "don't create competing service accounts," not a violation of
+        # it (there's no existing account to compete with).
+        if ! getent group vmail >/dev/null 2>&1; then
+            groupadd -g 5000 vmail || groupadd vmail
+        fi
+        if ! getent passwd vmail >/dev/null 2>&1; then
+            useradd -u 5000 -g vmail -d "$MAILDIR_BASE" -s /usr/sbin/nologin -M vmail \
+                || useradd -g vmail -d "$MAILDIR_BASE" -s /usr/sbin/nologin -M vmail
+        fi
+        mkdir -p "$MAILDIR_BASE"
+        chown vmail:vmail "$MAILDIR_BASE"
+        chmod 750 "$MAILDIR_BASE"
+
+        # --- Production-safety check: is there ALREADY a foreign
+        # passdb/userdb (hand-configured, not via our marker) live in the
+        # merged config? Re-checked here independently of debian.config's
+        # own check, since state can change between debconf-prompt time
+        # and postinst-run time. ---
+        FOREIGN_AUTH=""
+        if [ ! -f "$MARKER" ] && command -v doveconf >/dev/null 2>&1; then
+            FOREIGN_AUTH="$(doveconf -n 2>/dev/null | grep -E '^\s*(passdb|userdb)\s' || true)"
+        fi
+
+        if [ -n "$FOREIGN_AUTH" ] && [ "$FORCE_OVERWRITE" != "true" ]; then
+            echo ""
+            echo "NOTICE: existing hand-configured Dovecot auth was detected:"
+            echo "$FOREIGN_AUTH" | sed 's/^/    /'
+            echo ""
+            echo "Not activating homelab-mailread's config over it. Generated"
+            echo "files were written as *.recommended under $CONF_D and"
+            echo "/etc/dovecot/ for manual review. Re-run"
+            echo "'sudo dpkg-reconfigure homelab-mailread' and answer yes to"
+            echo "the overwrite question once you've reviewed them."
+            echo ""
+            SUFFIX=".recommended"
+        else
+            SUFFIX=""
+        fi
+
+        render() {
+            # render <template-relative-path> <dest-absolute-path>
+            sed \
+                -e "s#__DB_HOST__#$DB_HOST#g" \
+                -e "s#__DB_PORT__#$DB_PORT#g" \
+                -e "s#__DB_NAME__#$DB_NAME#g" \
+                -e "s#__DB_USER__#$DB_USER#g" \
+                -e "s#__DB_PASS__#$DB_PASS#g" \
+                -e "s#__MAILDIR_BASE__#$MAILDIR_BASE#g" \
+                -e "s#__INTROSPECTION_URL__#$INTROSPECTION_URL#g" \
+                "$SHARE_DIR/conf.d/$1" > "$2$SUFFIX"
+        }
+
+        mkdir -p "$CONF_D"
+        render 90-homelab-mailread-auth.conf.template "$CONF_D/90-homelab-mailread-auth.conf"
+        render 91-homelab-mailread-oauth2.conf.template "$CONF_D/91-homelab-mailread-oauth2.conf"
+        render 92-homelab-mailread-mail.conf.template "$CONF_D/92-homelab-mailread-mail.conf"
+        render dovecot-sql.conf.ext.template /etc/dovecot/dovecot-sql.conf.ext
+        render dovecot-oauth2-homelab.conf.ext.template /etc/dovecot/dovecot-oauth2-homelab.conf.ext
+        chmod 640 "/etc/dovecot/dovecot-sql.conf.ext$SUFFIX" "/etc/dovecot/dovecot-oauth2-homelab.conf.ext$SUFFIX" 2>/dev/null || true
+        chgrp dovecot "/etc/dovecot/dovecot-sql.conf.ext$SUFFIX" "/etc/dovecot/dovecot-oauth2-homelab.conf.ext$SUFFIX" 2>/dev/null || true
+
+        # --- 93: Sieve (conditional global script) ---
+        {
+            echo "# Managed by homelab-mailread — do not hand-edit."
+            echo "sieve_dir = ~/sieve"
+            echo "sieve = ~/.dovecot.sieve"
+            if [ -n "$SIEVE_GLOBAL" ]; then
+                echo "sieve_before = $SIEVE_GLOBAL"
+            fi
+        } > "$CONF_D/93-homelab-mailread-sieve.conf$SUFFIX"
+
+        # --- 94: listeners (conditional haproxy / cross-host SASL) ---
+        {
+            echo "# Managed by homelab-mailread — do not hand-edit."
+            if [ "$BEHIND_PROXY" = "true" ]; then
+                echo "service imap-login {"
+                echo "  inet_listener imaps {"
+                echo "    haproxy = yes"
+                echo "  }"
+                echo "}"
+                echo "haproxy_trusted_networks = 10.10.0.0/24, 127.0.0.0/8"
+            fi
+            if [ "$EXPOSE_SASL_INET" = "true" ]; then
+                echo "service auth {"
+                echo "  inet_listener {"
+                echo "    port = 12345"
+                echo "  }"
+                echo "}"
+            fi
+        } > "$CONF_D/94-homelab-mailread-listeners.conf$SUFFIX"
+
+        # --- Migrations: run on EVERY configure, not just first install
+        # (the exact bug class already fixed once in homelab-api's own
+        # postinst history). Skipped entirely while in *.recommended
+        # (non-activated) mode -- don't touch the database until the admin
+        # has actually confirmed activation. ---
+        if [ -z "$SUFFIX" ] && command -v psql >/dev/null 2>&1 && [ -d "$MIGRATIONS_DIR" ]; then
+            echo "Applying database schema migrations..."
+            for f in "$MIGRATIONS_DIR"/*.sql; do
+                [ -f "$f" ] || continue
+                if PGPASSWORD="$DB_PASS" PGCONNECT_TIMEOUT=5 psql -w -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+                        -v ON_ERROR_STOP=1 -f "$f" >/dev/null 2>&1; then
+                    echo "  applied $(basename "$f")"
+                else
+                    echo "  WARNING: failed to apply $(basename "$f") — check connectivity/permissions and re-run by hand."
+                fi
+            done
+        fi
+
+        # --- Validate before touching the service. If Dovecot is already
+        # running, reload ONLY -- never fall back to restart on a reload
+        # failure, since that would turn a bad-config problem into an
+        # actual outage (kill the running service, then potentially fail
+        # to come back up). If it isn't running yet (fresh install), start
+        # it -- there's nothing live to disrupt. ---
+        if [ -z "$SUFFIX" ]; then
+            if doveconf >/dev/null 2>&1; then
+                if systemctl is-active --quiet dovecot; then
+                    systemctl reload dovecot || echo "WARNING: dovecot reload failed -- NOT restarting automatically (that would risk turning a config problem into an outage). Check 'systemctl status dovecot' / 'journalctl -xeu dovecot' by hand."
+                else
+                    systemctl enable dovecot >/dev/null 2>&1 || true
+                    systemctl start dovecot || echo "WARNING: dovecot failed to start -- check 'systemctl status dovecot' / 'journalctl -xeu dovecot' by hand."
+                fi
+            else
+                echo "WARNING: doveconf reports a config error -- NOT touching Dovecot."
+                echo "         Run 'doveconf' by hand to see the error; the previous"
+                echo "         running config (if any) is untouched."
+            fi
+        fi
+
+        db_stop
+
+        echo ""
+        echo "homelab-mailread configured."
+        echo ""
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument: $1"
+        exit 1
+        ;;
+esac
+
+exit 0
