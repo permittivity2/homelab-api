@@ -1,0 +1,36 @@
+#!/bin/sh
+# Cleans up the systemd units that `homelab-borgbackup configure`/
+# install.sh write to /etc/systemd/system/ at runtime -- outside dpkg's
+# file manifest, since they're generated from templates (OnCalendar=,
+# ExecStart= paths) rather than shipped statically. Without this, `apt
+# remove`/`purge` would leave them enabled and running against a
+# possibly-removed binary/config. Mirrors install/uninstall.sh, which
+# remains authoritative for the non-packaged manual-install path.
+set -e
+
+UNIT_DIR=/etc/systemd/system
+ETC_DIR=/etc/homelab/borgbackup
+
+case "$1" in
+    remove|purge)
+        systemctl disable --now homelab-borgbackup.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borgbackup.timer >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borgbackup-check.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-borgbackup-check.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-borgbackup.service" "$UNIT_DIR/homelab-borgbackup.timer" \
+              "$UNIT_DIR/homelab-borgbackup-check.service" "$UNIT_DIR/homelab-borgbackup-check.timer"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+        ;;
+esac
+
+if [ "$1" = "purge" ]; then
+    # Removes the config, SSH key, and any escrowed key exports. If
+    # those were never copied off this host (see the README's Encryption
+    # & key escrow section), this is the last copy -- matches
+    # `uninstall.sh --purge`'s existing (intentional) behavior.
+    rm -rf "$ETC_DIR"
+fi
+
+#DEBHELPER#
+
+exit 0

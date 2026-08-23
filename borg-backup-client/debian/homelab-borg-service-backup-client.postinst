@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    echo
+    echo "homelab-borg-service-backup installed."
+    echo "Run 'homelab-borgbackup configure' to finish setup (encryption,"
+    echo "backup mode, schedule, and SSH trust to the backup server)."
+    echo
+fi
+
+#DEBHELPER#
+
+exit 0

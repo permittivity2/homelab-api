@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""CLI for the homelab-borg-service-backup-server package.
+
+Manages client enrollment on the centralized borg backup server: creates
+each client's restricted repo directory and appends a forced-command SSH
+key entry to the borgbackup service account's authorized_keys. Meant to
+be run locally (as root) by whoever administers this server -- client
+hosts never need SSH or sudo access to this machine to onboard.
+"""
+import argparse
+import grp
+import os
+import pwd
+import re
+import sys
+
+CONFIG_PATH = "/etc/homelab/homelab-borg-service-backup-server/config.yml"
+DEFAULT_BACKUP_USER = "borgbackup"
+DEFAULT_BACKUP_LOCATION = "/var/borgbackup"
+IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+RESTRICT_RE = re.compile(r'--restrict-to-repository ([^"]+)')
+
+
+def is_valid_identifier(identifier):
+    """True if identifier is safe to use as a path component (no
+    traversal, no shell/authorized_keys-breaking characters)."""
+    return bool(IDENTIFIER_RE.match(identifier))
+
+
+def build_authorized_keys_line(pubkey, restrict_path):
+    return f'command="borg serve --restrict-to-repository {restrict_path}",restrict {pubkey}'
+
+
+def identifier_from_line(line):
+    """Best-effort identifier extraction from an authorized_keys line
+    previously written by build_authorized_keys_line(), for list/revoke."""
+    match = RESTRICT_RE.search(line)
+    if not match:
+        return None
+    return os.path.basename(match.group(1))
+
+
+def enroll_lines(existing_lines, pubkey, new_line):
+    """Returns (new_lines, already_present). Idempotent: a pubkey already
+    present anywhere in the file is left untouched rather than
+    duplicated, matching how the client's own install.sh dedupes."""
+    if any(pubkey in line for line in existing_lines):
+        return existing_lines, True
+    return existing_lines + [new_line], False
+
+
+def revoke_lines(existing_lines, identifier):
+    """Returns (kept_lines, removed_count)."""
+    kept = [line for line in existing_lines if identifier_from_line(line) != identifier]
+    return kept, len(existing_lines) - len(kept)
+
+
+def load_config():
+    backup_user = DEFAULT_BACKUP_USER
+    backup_location = DEFAULT_BACKUP_LOCATION
+    if os.path.exists(CONFIG_PATH):
+        import yaml
+        with open(CONFIG_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        backup_user = data.get("backup_user") or backup_user
+        backup_location = data.get("backup_location") or backup_location
+    return backup_user, backup_location
+
+
+def require_root():
+    if os.geteuid() != 0:
+        sys.exit("must be run as root")
+
+
+def authorized_keys_path(backup_user):
+    home = pwd.getpwnam(backup_user).pw_dir
+    return os.path.join(home, ".ssh", "authorized_keys")
+
+
+def read_lines(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [line.rstrip("\n") for line in f if line.strip()]
+
+
+def write_lines_as_backup_user(path, lines, backup_user):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        for line in lines:
+            f.write(line + "\n")
+    uid = pwd.getpwnam(backup_user).pw_uid
+    gid = grp.getgrnam(backup_user).gr_gid
+    os.chown(os.path.dirname(path), uid, gid)
+    os.chown(path, uid, gid)
+    os.chmod(os.path.dirname(path), 0o700)
+    os.chmod(path, 0o600)
+
+
+def resolve_pubkey(raw):
+    raw = raw.strip()
+    if os.path.isfile(raw):
+        with open(raw) as f:
+            raw = f.read().strip()
+    if "ssh-" not in raw and "ecdsa-" not in raw:
+        sys.exit(f"'{raw}' does not look like an SSH public key (or a path to one)")
+    return raw
+
+
+def cmd_enroll(args):
+    require_root()
+    backup_user, backup_location = load_config()
+    if not is_valid_identifier(args.identifier):
+        sys.exit(f"invalid identifier '{args.identifier}': must match {IDENTIFIER_RE.pattern}")
+    pubkey = resolve_pubkey(args.pubkey)
+
+    restrict_path = os.path.join(backup_location, args.identifier)
+    os.makedirs(restrict_path, exist_ok=True)
+    uid = pwd.getpwnam(backup_user).pw_uid
+    gid = grp.getgrnam(backup_user).gr_gid
+    os.chown(restrict_path, uid, gid)
+
+    ak_path = authorized_keys_path(backup_user)
+    existing = read_lines(ak_path)
+    new_line = build_authorized_keys_line(pubkey, restrict_path)
+    updated, already_present = enroll_lines(existing, pubkey, new_line)
+    write_lines_as_backup_user(ak_path, updated, backup_user)
+
+    if already_present:
+        print(f"'{args.identifier}' already enrolled, nothing to do")
+    else:
+        print(f"enrolled '{args.identifier}' -> {restrict_path}")
+
+
+def cmd_list(args):
+    backup_user, _ = load_config()
+    for line in read_lines(authorized_keys_path(backup_user)):
+        identifier = identifier_from_line(line)
+        if identifier:
+            print(identifier)
+
+
+def cmd_revoke(args):
+    require_root()
+    backup_user, _ = load_config()
+    ak_path = authorized_keys_path(backup_user)
+    existing = read_lines(ak_path)
+    kept, removed = revoke_lines(existing, args.identifier)
+    if removed == 0:
+        sys.exit(f"no enrolled key found for identifier '{args.identifier}'")
+    write_lines_as_backup_user(ak_path, kept, backup_user)
+    print(f"revoked {removed} key(s) for '{args.identifier}'")
+
+
+PACKAGED_DATA_DIR = "/usr/share/homelab-borg-service-backup-server"
+
+
+def cmd_admin_recovery_key(args):
+    require_root()
+    sibling = os.path.join(os.path.dirname(os.path.realpath(__file__)), "setup-admin-recovery-key.sh")
+    script = sibling if os.path.exists(sibling) else os.path.join(PACKAGED_DATA_DIR, "setup-admin-recovery-key.sh")
+    cmd = [script]
+    if args.backup_user:
+        cmd += ["--backup-user", args.backup_user]
+    if args.backup_location:
+        cmd += ["--backup-location", args.backup_location]
+    os.execv(script, cmd)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="homelab-borg-service-backup-server")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_enroll = sub.add_parser("enroll", help="Enroll a new client host")
+    p_enroll.add_argument("identifier", help="Client host identifier (its config.yml hostname)")
+    p_enroll.add_argument("pubkey", help="Client's public key (string, or path to a .pub file)")
+    p_enroll.set_defaults(func=cmd_enroll)
+
+    p_list = sub.add_parser("list", help="List enrolled client identifiers")
+    p_list.set_defaults(func=cmd_list)
+
+    p_revoke = sub.add_parser("revoke", help="Revoke a client's enrollment")
+    p_revoke.add_argument("identifier")
+    p_revoke.set_defaults(func=cmd_revoke)
+
+    p_admin = sub.add_parser("admin-recovery-key", help="Generate/install the broader admin recovery SSH key")
+    p_admin.add_argument("--backup-user")
+    p_admin.add_argument("--backup-location")
+    p_admin.set_defaults(func=cmd_admin_recovery_key)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

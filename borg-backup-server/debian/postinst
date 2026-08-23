@@ -1,0 +1,59 @@
+#!/bin/sh
+# Non-interactive, idempotent server-side setup: creates the borgbackup
+# system user/group, the backup directory, a config.yml recording their
+# names/path (so they can be overridden later without touching this
+# script), and an empty authorized_keys skeleton ready for `enroll`.
+set -e
+
+BACKUP_USER=borgbackup
+BACKUP_LOCATION=/var/borgbackup
+ETC_DIR=/etc/homelab/homelab-borg-service-backup-server
+CONFIG=$ETC_DIR/config.yml
+
+if [ "$1" = "configure" ]; then
+    if ! getent group "$BACKUP_USER" >/dev/null; then
+        addgroup --system "$BACKUP_USER"
+    fi
+    if ! getent passwd "$BACKUP_USER" >/dev/null; then
+        adduser --system --ingroup "$BACKUP_USER" --home /var/lib/borgbackup \
+            --shell /usr/sbin/nologin --disabled-password --disabled-login \
+            "$BACKUP_USER"
+    fi
+
+    mkdir -p "$BACKUP_LOCATION"
+    chown "$BACKUP_USER":"$BACKUP_USER" "$BACKUP_LOCATION"
+    chmod 700 "$BACKUP_LOCATION"
+
+    mkdir -p "$ETC_DIR"
+    if [ ! -f "$CONFIG" ]; then
+        cat > "$CONFIG" <<EOF
+# homelab-borg-service-backup-server config.
+# backup_user: system account that owns repos and accepts client SSH keys.
+# backup_location: base directory under which each client's repo lives
+#   (repo path becomes <this>/<client-identifier>). Override here if this
+#   server predates the $BACKUP_LOCATION default (e.g. an existing
+#   deployment already using /mnt/borgbackup).
+backup_user: $BACKUP_USER
+backup_location: $BACKUP_LOCATION
+EOF
+        chmod 644 "$CONFIG"
+    fi
+
+    user_home=$(getent passwd "$BACKUP_USER" | cut -d: -f6)
+    mkdir -p "$user_home/.ssh"
+    touch "$user_home/.ssh/authorized_keys"
+    chmod 700 "$user_home/.ssh"
+    chmod 600 "$user_home/.ssh/authorized_keys"
+    chown -R "$BACKUP_USER":"$BACKUP_USER" "$user_home/.ssh"
+
+    echo
+    echo "homelab-borg-service-backup-server installed."
+    echo "'$BACKUP_USER' user/group, $BACKUP_LOCATION, and $CONFIG are ready."
+    echo "Enroll a client with:"
+    echo "  homelab-borg-service-backup-server enroll <identifier> '<client pubkey>'"
+    echo
+fi
+
+#DEBHELPER#
+
+exit 0

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Deliberately conservative: never touches the backup_location directory
+# or its contents, even on purge -- that's live backup data, not
+# package-owned config, and deleting it is a decision a human should
+# make explicitly, not something a package removal does implicitly.
+set -e
+
+ETC_DIR=/etc/homelab/homelab-borg-service-backup-server
+
+if [ "$1" = "purge" ]; then
+    rm -rf "$ETC_DIR"
+fi
+
+#DEBHELPER#
+
+exit 0

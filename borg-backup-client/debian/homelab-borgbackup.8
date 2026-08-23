@@ -1,0 +1,135 @@
+.TH HOMELAB-BORGBACKUP 8 "2026-08-16" "homelab-borg-service-backup" "System Administration"
+.SH NAME
+homelab-borgbackup \- borg-based backup/restore client for homelab service configs
+.SH SYNOPSIS
+.B homelab-borgbackup
+.I command
+.RI [ args ...]
+.SH DESCRIPTION
+.B homelab-borgbackup
+pushes encrypted
+.BR borg (1)
+archives from this host to a centralized backup server over SSH, driven
+by
+.IR /etc/homelab/borgbackup/config.yml .
+It exists to let an administrator restore a homelab service's config
+(guaranteed to live under
+.IR /etc/homelab/<component>/ )
+or an entire server to a point in time after a disaster. It is not a
+user-data backup tool.
+.SH COMMANDS
+.TP
+.B configure
+Interactively (re-)configure this host: config values, an
+auto-generated per-host encryption passphrase, backup mode, schedule,
+and SSH trust to the backup server. Run this once after installing the
+package. Not available outside of a Debian package install (see
+.B install/install.sh
+in a git checkout instead).
+.TP
+.BI "backup " "[--dry-run] [--once] [--config PATH]"
+Run a backup per config.yml. This is also what the installed systemd
+unit/timer invokes; running it with no subcommand at all is still
+accepted for compatibility and behaves identically.
+.B --dry-run
+prints the resolved sources, exclude patterns, and the exact
+.B borg create
+/
+.B borg prune
+commands without executing them.
+.B --once
+forces a single run even when
+.B schedule.mode
+is
+.BR continuous .
+.TP
+.BI "check " "[--config PATH]"
+Run
+.B borg check
+(read-only integrity verification, never
+.BR --repair ,
+which is a deliberate manual admin action) against this host's own
+repo. Also what the
+.B homelab-borgbackup-check
+timer invokes, on the schedule set by
+.B integrity_check.mode
+in config.yml (default
+.BR monthly ).
+.TP
+.BI "list-archives " "[--host ID] [--server S] [--ssh-user U] [--location DIR] [--ssh-key PATH] [--passphrase-file PATH]"
+List archives in a repo. All options default to the local config.yml;
+override them to inspect a different host's repo, e.g. during disaster
+recovery with the admin recovery key (see
+.B setup-admin-recovery-key.sh ).
+.TP
+.BI "restore --archive NAME --target DIR " "[--paths ...] [--dry-run] [same overrides as list-archives]"
+Extract an archive into
+.IR DIR ,
+which is created if missing. Extraction always goes into an explicit
+target directory, never directly over
+.IR / ,
+so a restore is reviewable before anything is copied into place by
+hand.
+.B --dry-run
+lists what would be extracted without writing anything.
+.SH FILES
+.TP
+.I /etc/homelab/borgbackup/config.yml
+Per-host configuration. Mode 600, root:root \- contains the repo
+encryption passphrase. See the shipped
+.I config.example.yml
+for the full documented schema.
+.TP
+.I /etc/homelab/borgbackup/ssh/id_ed25519
+This host's dedicated SSH key, restricted server-side to
+.B "borg serve --restrict-to-repository"
+for this host's own repo path only.
+.TP
+.I /etc/homelab/borgbackup/key-escrow/
+Exported borg key material (a
+.B "borg key export"
+and a
+.B --paper
+copy), written on first backup. Not replicated off this host
+automatically \- copy both this and the passphrase above to a secrets
+manager and an offline/paper copy.
+.SH RUN-TRACKING DATABASE
+If
+.B database.enabled
+is set in config.yml (asked about interactively by
+.BR configure ),
+each
+.B backup
+/
+.B check
+run records one row to a PostgreSQL database (host/repo identity plus
+per-run status, timing, and \- for backups \- size/file-count stats from
+.BR "borg create --json" ).
+This only writes; there is no read/query interface yet, and a database
+error never fails or blocks an actual backup. See
+.I install/schema.sql
+for the schema (a dedicated
+.B service_backup
+Postgres schema, not
+.BR public ,
+so other homelab-* packages can share the same database without
+colliding on table names).
+.SH DISASTER RECOVERY
+See the
+.B "Restoring onto a fresh/replacement host"
+section of this package's README for the full runbook: generate an
+admin recovery SSH key once on the backup server
+.RI ( setup-admin-recovery-key.sh ),
+retrieve the escrowed passphrase for the lost host, then
+.B list-archives
+/
+.B restore
+against its repo using
+.B --host
+and
+.B --ssh-key
+to point at the recovery key instead of the (destroyed) per-host key.
+.SH SEE ALSO
+.BR borg (1)
+.SH AUTHOR
+Jeff Gardner <mailmasker-api01@forge.name>
