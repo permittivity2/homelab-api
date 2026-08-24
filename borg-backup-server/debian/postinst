@@ -15,9 +15,24 @@ if [ "$1" = "configure" ]; then
         addgroup --system "$BACKUP_USER"
     fi
     if ! getent passwd "$BACKUP_USER" >/dev/null; then
+        # /bin/sh, not /usr/sbin/nologin: OpenSSH runs an authorized_keys
+        # command="..." forced command via the target user's configured
+        # shell ($SHELL -c "command"). nologin unconditionally refuses to
+        # run anything at all ("This account is currently not
+        # available.", ignoring the command entirely) -- confirmed live,
+        # this silently broke every borg serve session for this user
+        # regardless of correct enrollment. The command="..."/restrict
+        # pair in authorized_keys already fully constrains what the
+        # connection can do; nologin isn't adding any extra restriction
+        # here, only breaking the one thing this account exists for.
         adduser --system --ingroup "$BACKUP_USER" --home /var/lib/borgbackup \
-            --shell /usr/sbin/nologin --disabled-password --disabled-login \
+            --shell /bin/sh --disabled-password --disabled-login \
             "$BACKUP_USER"
+    elif [ "$(getent passwd "$BACKUP_USER" | cut -d: -f7)" = "/usr/sbin/nologin" ]; then
+        # Upgrade path for an existing install created before this fix.
+        echo "  fixing $BACKUP_USER's shell (was /usr/sbin/nologin, which"
+        echo "  breaks every SSH forced command for this account)"
+        usermod --shell /bin/sh "$BACKUP_USER"
     fi
 
     mkdir -p "$BACKUP_LOCATION"

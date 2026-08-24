@@ -1,3 +1,20 @@
+homelab-borg-service-backup-server (0.2.5) unstable; urgency=medium
+
+  * Fix: the borgbackup system user was created with --shell
+    /usr/sbin/nologin, which silently broke every SSH forced command
+    for this account regardless of correct enrollment -- OpenSSH runs
+    an authorized_keys command="..." entry via the user's shell
+    ($SHELL -c "command"), and nologin unconditionally refuses to run
+    anything at all ("This account is currently not available."),
+    ignoring the command entirely. Caught live: no borg serve session
+    for this user could ever have succeeded. Now uses /bin/sh --
+    command="..."/restrict in authorized_keys already fully constrains
+    the connection, so nologin wasn't adding any extra restriction,
+    only breaking the one thing this account exists for. Existing
+    installs get their shell corrected automatically on upgrade.
+
+ -- Gardner <gardner@homelab>  Sun, 23 Aug 2026 19:30:00 -0500
+
 homelab-borg-service-backup-server (0.2.4) unstable; urgency=medium
 
   * Ship backup-paths.txt (its own config dir + the borgbackup user's
