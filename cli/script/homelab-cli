@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 """Command-line client for the Homelab API.
 
 Wraps every homelab-api REST endpoint as a subcommand, grouped by area
@@ -7,6 +8,11 @@ session/auth commands (login, logout, configure, health, ...) stay
 top-level since they're used before any group context applies. Persists a
 login session (JWT + refresh token) under ~/.config/homelab-cli/ and
 transparently refreshes an expired JWT on the caller's behalf.
+
+Tab completion is generated from this file's own argparse tree via
+argcomplete (see main()) rather than hand-maintained -- there is no
+separate completions file to keep in sync when a subcommand/flag is
+added or renamed here.
 """
 
 import argparse
@@ -16,6 +22,7 @@ import sys
 import time
 from pathlib import Path
 
+import argcomplete
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
@@ -1372,6 +1379,7 @@ def build_parser():
 
 def main():
     parser = build_parser()
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
     try:
         sys.exit(args.func(args) or 0)

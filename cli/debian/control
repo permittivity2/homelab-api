@@ -8,7 +8,7 @@ Homepage: https://github.com/permittivity2/homelab-api
 
 Package: homelab-cli
 Architecture: all
-Depends: ${misc:Depends}, python3 (>= 3.10), python3-requests, python3-requests-toolbelt
+Depends: ${misc:Depends}, python3 (>= 3.10), python3-requests, python3-requests-toolbelt, python3-argcomplete, bash-completion
 Description: Command-line client for the Homelab API
  A site-admin scripting tool for the Homelab Drive REST API: login/session
  management with automatic JWT refresh, and one subcommand per API call
