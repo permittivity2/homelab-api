@@ -1,4 +1,4 @@
-homelab-backup-client (1.0.0) unstable; urgency=medium
+homelab-backup-client (0.4.0) unstable; urgency=medium
 
   * BREAKING: renamed from homelab-borg-service-backup-client to
     homelab-backup-client (binary, /etc/homelab/backup/client/ config

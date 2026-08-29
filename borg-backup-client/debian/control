@@ -12,7 +12,7 @@ Depends: ${misc:Depends}, python3 (>= 3.10), python3-yaml, borgbackup, openssh-c
 Recommends: python3-systemd
 Conflicts: borgbackup2
 Replaces: homelab-borg-service-backup-client, homelab-borg-service-backup
-Breaks: homelab-borg-service-backup-client (<< 1.0.0), homelab-borg-service-backup (<< 0.2.0)
+Breaks: homelab-borg-service-backup-client (<< 0.4.0), homelab-borg-service-backup (<< 0.2.0)
 Description: Homelab backup client built on borg, homelab-api integrated
  Client-side backup tool that pushes encrypted per-host borg archives to
  a centralized backup server over SSH, driven by a per-host config in

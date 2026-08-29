@@ -1,4 +1,4 @@
-homelab-backup-server (1.0.0) unstable; urgency=medium
+homelab-backup-server (0.4.0) unstable; urgency=medium
 
   * BREAKING: renamed from homelab-borg-service-backup-server to
     homelab-backup-server (binary, package, config dir

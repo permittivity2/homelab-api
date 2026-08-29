@@ -10,7 +10,7 @@ Package: homelab-backup-server
 Architecture: all
 Depends: ${misc:Depends}, python3 (>= 3.10), python3-yaml, borgbackup, adduser, openssh-server, homelab-cli
 Replaces: homelab-borg-service-backup-server
-Breaks: homelab-borg-service-backup-server (<< 1.0.0)
+Breaks: homelab-borg-service-backup-server (<< 0.4.0)
 Conflicts: borgbackup2
 Description: Homelab service/config backup server built on borg
  Centralized-server counterpart to homelab-backup-client. Installing
