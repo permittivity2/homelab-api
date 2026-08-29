@@ -86,6 +86,35 @@ sub list_roles {
     return $self->{db}->query_rows('SELECT id, name, description FROM api.roles ORDER BY name');
 }
 
+# All accounts, their roles, and whether they're active. dovecot.users.active
+# is real, already-enforced data (user_id() above requires active = 'Y' to
+# resolve a login at all) -- there's just no admin-facing way to *change* it
+# yet (no activate/deactivate endpoint), so this surfaces the true value
+# rather than a placeholder.
+sub list_users {
+    my ($self) = @_;
+    my $rows = $self->{db}->query_rows(
+        'SELECT u.id, u.username, u.domain, u.active, r.name AS role_name
+         FROM dovecot.users u
+         LEFT JOIN api.user_roles ur ON ur.user_id = u.id
+         LEFT JOIN api.roles r ON r.id = ur.role_id
+         ORDER BY u.username, u.domain, r.name'
+    );
+    my (%by_id, @order);
+    for my $row (@$rows) {
+        unless ($by_id{$row->{id}}) {
+            $by_id{$row->{id}} = {
+                email  => "$row->{username}\@$row->{domain}",
+                active => ($row->{active} eq 'Y' ? 1 : 0),
+                roles  => [],
+            };
+            push @order, $by_id{$row->{id}};
+        }
+        push @{ $by_id{$row->{id}}{roles} }, $row->{role_name} if defined $row->{role_name};
+    }
+    return \@order;
+}
+
 # Single-JOIN version of list_roles, embedding each role's permissions —
 # avoids the N+1 pattern of list_roles + one list_role_permissions call per
 # role. Note: site_admin's permissions here reflect only what's explicitly

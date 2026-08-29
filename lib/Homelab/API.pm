@@ -1112,6 +1112,10 @@ $a->post('/users' => sub ($c) {
     return _set_json_response($c, $result, $status);
 });
 
+$a->get('/users' => sub ($c) {
+    return _set_json_response($c, { success => 1, users => $roles->list_users }, 200);
+});
+
 $a->get('/users/#email/roles' => sub ($c) {
     my $target = $c->stash('email');
     return _set_json_response($c, { success => 1, email => $target, roles => $roles->user_roles($target) }, 200);

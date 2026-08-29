@@ -753,6 +753,10 @@ def cmd_admin_list_roles(args):
     return _print_response(_request(args, "GET", "/api/v1/admin/roles"))
 
 
+def cmd_admin_list_users(args):
+    return _print_response(_request(args, "GET", "/api/v1/admin/users"))
+
+
 def cmd_admin_role_permissions(args):
     return _print_response(_request(args, "GET", f"/api/v1/admin/roles/{args.role}/permissions"))
 
@@ -1230,6 +1234,16 @@ def build_parser():
     admin = add_group("admin", "Site administration (roles/permissions/user management).")
 
     admin("list-roles", cmd_admin_list_roles, "List all roles.")
+
+    admin(
+        "list-users", cmd_admin_list_users,
+        "List all accounts, their roles, and whether each is active.",
+        description="Lists every dovecot.users account with its assigned roles and its "
+                     "active flag. 'active' reflects the real, already-enforced "
+                     "dovecot.users.active column (a user with active=false cannot log in "
+                     "at all) -- there is currently no admin endpoint to change it, only "
+                     "to read it.",
+    )
 
     p = admin("role-permissions", cmd_admin_role_permissions, "List endpoints granted to a role.")
     p.add_argument("role", help="Role name (e.g. user, site_admin).")
