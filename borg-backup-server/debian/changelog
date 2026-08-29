@@ -12,8 +12,14 @@ homelab-backup-server (1.0.0) unstable; urgency=medium
     administrator running `enroll` here by hand for every host. This
     server polls for pending enroll/revoke requests via the new
     `reconcile` subcommand, run automatically by the new
-    homelab-backup-server-reconcile.timer (default every 5 minutes,
-    configurable via config.yml's reconcile.interval_minutes).
+    homelab-backup-server-reconcile.timer (default every 15 seconds --
+    the poll itself is a single cheap local API call, so there's no
+    real cost to polling often; the low default exists specifically so
+    a freshly-enrolled client isn't left waiting on a slow timer before
+    its first backup. Configurable via config.yml's
+    reconcile.interval_seconds, though changing it there alone doesn't
+    take effect until 'setup' is re-run or the installed timer unit is
+    reloaded -- see the comment in config.yml).
     `reconcile` reuses the exact same authorized_keys-building/parsing
     functions `enroll`/`revoke` always have, now writing
     authorized_keys via write-to-temp-file + os.rename() for true

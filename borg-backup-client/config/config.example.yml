@@ -35,6 +35,16 @@ ssh_backup_server_username: borgbackup
 # package (see its config.yml).
 backup_server_location: /var/borgbackup
 
+# During `setup`, after submitting this host's enrollment, opportunistically
+# try to SSH into the backup server (using YOUR OWN ambient SSH identity/
+# config, not this host's dedicated backup key) and trigger its
+# reconciliation job immediately, instead of waiting out its poll interval
+# (default every 15s -- see homelab-backup-server's own config.yml). Only
+# works if you happen to already have your own SSH/sudo access to that
+# host; silently does nothing otherwise, and the reconciliation timer
+# covers it regardless. Set to false to skip attempting this entirely.
+kick_reconcile: true
+
 # --- Control plane (homelab-api / homelab-cli) -----------------------------
 # Used for two things: (1) enrolling this host's SSH pubkey with the
 # backup server via a poll/reconcile loop instead of a manual admin

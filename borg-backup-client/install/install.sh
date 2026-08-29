@@ -374,6 +374,35 @@ ensure_homelab_cli_session() {
     return 0
 }
 
+# Best-effort UX accelerant: reconciliation happens on its own timer
+# regardless (default every 15s, see homelab-backup-server's config.yml),
+# but a freshly-installed host still has to wait out at least part of
+# that interval before its first backup can run. If the person running
+# THIS setup also happens to have their own SSH/sudo access to the backup
+# server host (common in a homelab -- same admin installs both sides),
+# nudge that timer's service to run right now instead of waiting.
+#
+# Uses the OPERATOR's own ambient SSH identity/agent/config -- never this
+# host's own dedicated backup key (which is restricted to `borg serve`
+# and couldn't run this even if it tried). Silently does nothing if that
+# access doesn't exist; the poll loop below works unattended either way.
+# Set kick_reconcile: false in config.yml to skip attempting this
+# entirely (e.g. if an unexpected outbound SSH attempt during setup is
+# unwelcome in your environment).
+kick_reconcile() {
+    local server=$1
+    if [ "$(cfg_get kick_reconcile)" = "false" ]; then
+        return
+    fi
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+        "$server" 'sudo systemctl start homelab-backup-server-reconcile.service' \
+        >/dev/null 2>&1; then
+        log "nudged homelab-backup-server's reconciliation job to run immediately" \
+            "(this only works if you happen to already have your own SSH/sudo" \
+            "access to $server -- harmless no-op otherwise, the timer covers it)"
+    fi
+}
+
 # Onboarding a client no longer involves a human running a manual
 # `enroll` command on the backup server at all -- this submits the
 # host's pubkey to homelab-api once, then polls waiting for
@@ -436,10 +465,12 @@ setup_control_plane() {
         return
     fi
 
+    kick_reconcile "$server"
+
     echo
     log "no admin action needed -- waiting for homelab-backup-server's own"
-    log "reconciliation job (runs on its own timer, typically every few"
-    log "minutes) to apply this enrollment to its authorized_keys"
+    log "reconciliation job (runs on its own timer, every few seconds by"
+    log "default) to apply this enrollment to its authorized_keys"
     echo
 
     local retry_choice probe

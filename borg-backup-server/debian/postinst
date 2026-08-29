@@ -78,9 +78,21 @@ homelab_cli:
   password: ""
 
 # How often homelab-backup-server-reconcile.timer polls homelab-api for
-# pending client enroll/revoke requests.
+# pending client enroll/revoke requests. Each poll costs one cheap local
+# API call (~100ms) -- there's no real cost to polling often, so this
+# defaults low specifically so a freshly-enrolled client doesn't sit
+# waiting on a slow timer before it can back up for the first time.
+#
+# IMPORTANT: changing this value here does NOT take effect by itself --
+# the systemd timer unit is only (re)generated when 'homelab-backup-server
+# setup' runs. After editing this, either re-run 'setup', or apply it
+# immediately by hand:
+#   sed -i 's/OnUnitActiveSec=.*/OnUnitActiveSec=<N>sec/' \\
+#     /etc/systemd/system/homelab-backup-server-reconcile.timer
+#   systemctl daemon-reload
+#   systemctl restart homelab-backup-server-reconcile.timer
 reconcile:
-  interval_minutes: 5
+  interval_seconds: 15
 EOF
         chmod 644 "$CONFIG"
     fi
