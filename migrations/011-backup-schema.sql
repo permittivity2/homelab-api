@@ -115,10 +115,21 @@ ON CONFLICT (name) DO NOTHING;
 -- table (NOT the hardcoded is_site_admin bypass /api/v1/admin/* uses), so
 -- site_admin gets nothing on this bridge for free and must be seeded here
 -- too, same as `user` was seeded for Drive/mail routes in migration 006.
+-- Also seed the base auth endpoints for `backup` specifically: a
+-- homelab-backup-client/-server service account typically holds ONLY the
+-- `backup` role (not `user`). homelab-backup-server's own `setup`/
+-- `reconcile` sanity checks call `validate`, and every homelab-cli command's
+-- transparent-refresh-on-401 path calls `refresh` once the JWT's
+-- jwt.expiry_seconds (default 3600s) elapses -- without these two grants a
+-- backup-only account could authenticate once but never validate its own
+-- session nor refresh past its first hour.
 INSERT INTO api.role_permissions (role_id, endpoint_key)
 SELECT r.id, k
 FROM api.roles r
 CROSS JOIN (VALUES
+    ('GET /api/v1/auth/validate'),
+    ('POST /api/v1/auth/refresh'),
+    ('POST /api/v1/auth/logout'),
     ('POST /api/v1/backup/enroll'),
     ('GET /api/v1/backup/enrollments'),
     ('POST /api/v1/backup/enrollments/:id/ack'),

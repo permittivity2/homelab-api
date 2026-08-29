@@ -6,7 +6,13 @@
 -- Homelab::Roles::assign_role accepts any role for any target with no
 -- check at all).
 
-GRANT INSERT (username, domain, password, active, quota_mb) ON dovecot.users TO homelab_api;
+-- home/uid/gid are NOT NULL on dovecot.users with no default -- real mail
+-- accounts get real values from the mail stack's own provisioning, but a
+-- service account created via this endpoint (e.g. homelab-backup-server's
+-- control-plane account) has no real mailbox, so Homelab::Roles::create_user
+-- fills these with sentinel "not a real mailbox" values (home=/nonexistent,
+-- uid/gid=65534, traditional "nobody").
+GRANT INSERT (username, domain, password, home, uid, gid, active, quota_mb) ON dovecot.users TO homelab_api;
 GRANT USAGE, SELECT ON SEQUENCE dovecot.users_id_seq TO homelab_api;
 
 CREATE TABLE IF NOT EXISTS api.role_grant_permissions (

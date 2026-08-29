@@ -165,8 +165,12 @@ sub create_user {
     my $hash = hash_password($plaintext);
     my $quota_mb = $opts{quota_mb} // 1024;
 
+    # home/uid/gid are NOT NULL with no default on dovecot.users, but a
+    # service account created here has no real mailbox -- use "nobody"
+    # sentinel values (matches migration 012's INSERT grant column list).
     $self->{db}->query(
-        'INSERT INTO dovecot.users (username, domain, password, active, quota_mb) VALUES (?, ?, ?, ?, ?)',
+        "INSERT INTO dovecot.users (username, domain, password, home, uid, gid, active, quota_mb)
+         VALUES (?, ?, ?, '/nonexistent', 65534, 65534, ?, ?)",
         $username, $domain, $hash, 'Y', $quota_mb
     );
     $self->assign_role($email, $role_name, $creator_email);
