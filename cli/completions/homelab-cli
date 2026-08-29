@@ -17,7 +17,11 @@ _homelab_cli_value_flags="--email --set-api-url --path --dir-id --startat \
 --parent-id --version --output --to-path --name --share-with --permission \
 --current-dir-id --endpoint --role --file-ids --dir-ids --folder --offset --limit \
 --from --to --subject --body --since --before --add --remove --cc --bcc --html \
---attach-file --attach-drive --in-reply-to"
+--attach-file --attach-drive --in-reply-to --config --password --password-env \
+--quota-mb --identifier --hostname --pubkey --pubkey-file --action --repo-ssh-user \
+--repo-server --repo-location --mode --started-at --finished-at --status \
+--archive-name --original-size --compressed-size --deduplicated-size --file-count \
+--error-message --ssh-user --location"
 
 _homelab_cli_is_value_flag() {
     local flag="$1" f
@@ -38,8 +42,8 @@ _homelab_cli_filecomplete() {
     fi
 }
 
-_homelab_cli_top_commands="login logout configure validate introspect refresh health mail drive admin"
-_homelab_cli_group_names="mail drive admin"
+_homelab_cli_top_commands="login logout configure validate introspect refresh health mail drive admin backup"
+_homelab_cli_group_names="mail drive admin backup"
 
 _homelab_cli_mail_subcommands="status folders messages message part search \
 flags move trash purge folder-create folder-rename folder-delete \
@@ -52,9 +56,13 @@ list-directories create-directory delete-directory update-directory \
 share-file share-directory list-shares list-shares-with-me delete-share \
 bulk-trash bulk-restore bulk-move bulk-copy create-zip"
 
-_homelab_cli_admin_subcommands="list-roles role-permissions grant-permission \
+_homelab_cli_admin_subcommands="list-roles list-users role-permissions grant-permission \
 revoke-permission user-roles grant-role revoke-role reset-password \
-revoke-tokens force-relogin"
+revoke-tokens force-relogin create-user"
+
+_homelab_cli_backup_subcommands="enroll list-pending-enrollments ack-enrollment \
+revoke-host report-run report-check list-hosts list-repos host-runs \
+server-info set-server-info"
 
 _homelab_cli_is_group() {
     local name="$1" g
@@ -69,6 +77,7 @@ _homelab_cli_subcommands_for_group() {
         mail) echo "$_homelab_cli_mail_subcommands" ;;
         drive) echo "$_homelab_cli_drive_subcommands" ;;
         admin) echo "$_homelab_cli_admin_subcommands" ;;
+        backup) echo "$_homelab_cli_backup_subcommands" ;;
     esac
 }
 
@@ -121,7 +130,7 @@ _homelab_cli_completions() {
 
     # Nothing typed yet: top-level commands + group names.
     if [[ -z "$group" ]]; then
-        COMPREPLY=( $(compgen -W "-h --help --api-url $_homelab_cli_top_commands" -- "$cur") )
+        COMPREPLY=( $(compgen -W "-h --help --api-url --config $_homelab_cli_top_commands" -- "$cur") )
         return 0
     fi
 
@@ -144,7 +153,7 @@ _homelab_cli_completions() {
     fi
 
     case "$group $subcommand" in
-        "login") opts="--email" ;;
+        "login") opts="--email --password --password-stdin --password-env" ;;
         "configure") opts="--set-api-url" ;;
         "drive share-download"|"drive download-file") opts="--output --version" ;;
         "drive file-info"|"drive list-files") opts="--path --dir-id --startat --recursive" ;;
@@ -161,6 +170,16 @@ _homelab_cli_completions() {
         "drive create-zip") opts="--file-ids --dir-ids --dir-id" ;;
         "admin grant-permission"|"admin revoke-permission") opts="--endpoint" ;;
         "admin grant-role") opts="--role" ;;
+        "admin create-user") opts="--role --quota-mb" ;;
+        "backup enroll") opts="--identifier --hostname --pubkey --pubkey-file" ;;
+        "backup list-pending-enrollments") opts="--action" ;;
+        "backup ack-enrollment") opts="--repo-ssh-user --repo-server --repo-location" ;;
+        "backup report-run") opts="--identifier --mode --started-at --finished-at --status \
+--archive-name --original-size --compressed-size --deduplicated-size --file-count --error-message" ;;
+        "backup report-check") opts="--identifier --started-at --finished-at --status --error-message" ;;
+        "backup list-repos") opts="--identifier" ;;
+        "backup host-runs") opts="--limit" ;;
+        "backup set-server-info") opts="--hostname --ssh-user --location" ;;
         "mail messages") opts="--folder --offset --limit" ;;
         "mail message") opts="--folder" ;;
         "mail part") opts="--folder --output" ;;
