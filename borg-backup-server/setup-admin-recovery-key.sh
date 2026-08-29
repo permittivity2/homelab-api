@@ -15,7 +15,7 @@ set -euo pipefail
 
 BACKUP_USER=borgbackup
 BACKUP_LOCATION=/var/borgbackup
-KEY_DIR=/root/homelab-borg-service-backup-client-admin-recovery
+KEY_DIR=/root/homelab-backup-client-admin-recovery
 KEY_PATH="$KEY_DIR/id_ed25519"
 
 while [ $# -gt 0 ]; do
@@ -46,7 +46,7 @@ else
     mkdir -p "$KEY_DIR"
     chmod 700 "$KEY_DIR"
     log "generating admin recovery keypair at $KEY_PATH"
-    ssh-keygen -t ed25519 -N "" -f "$KEY_PATH" -C "homelab-borg-service-backup-client-admin-recovery" >/dev/null
+    ssh-keygen -t ed25519 -N "" -f "$KEY_PATH" -C "homelab-backup-client-admin-recovery" >/dev/null
     chmod 600 "$KEY_PATH"
     chmod 644 "$KEY_PATH.pub"
 fi
@@ -81,6 +81,6 @@ echo "  Copy this key to a password manager/secrets vault AND an offline/"
 echo "  paper copy. It is the fallback path to restore ANY host's repo on"
 echo "  this server when that host's own dedicated key is gone. Use it with:"
 echo
-echo "    homelab-borg-service-backup-client list-archives --host <identifier> --server $(hostname) \\"
+echo "    homelab-backup-client list-archives --host <identifier> --server $(hostname) \\"
 echo "        --ssh-user $BACKUP_USER --location $BACKUP_LOCATION --ssh-key <path-to-this-key>"
 echo "########################################################################"

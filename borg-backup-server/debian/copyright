@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: homelab-borg-service-backup-server
+Upstream-Name: homelab-backup-server
 Upstream-Contact: Jeff Gardner <mailmasker-api01@forge.name>
 Source: https://github.com/permittivity2/homelab-api
 

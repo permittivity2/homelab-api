@@ -45,7 +45,18 @@ psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/001-create-refr
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/002-drive-schema.sql
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/003-drive-tasks-schema.sql
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/004-sharing-folders.sql
+# ... 005 through 010 (rate limits, RBAC, mail permissions) ...
+psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/011-backup-schema.sql
+psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/012-create-user-support.sql
 ```
+
+Migrations 011/012 must be applied **in that order** and before installing
+`homelab-backup-server`/`homelab-backup-client` anywhere — those packages assume
+`/api/v1/backup/*` and `POST /api/v1/admin/users` already exist. See
+`migrations/011-backup-schema.sql`'s header comment for what it adds (the
+`backup` schema/role, plus `/api/v1/backup/*` endpoint permissions) and
+`migrations/012-create-user-support.sql`'s (the `create-user` admin endpoint's
+supporting grant + the `api.role_grant_permissions` table).
 
 ### Start Development Server
 
@@ -111,7 +122,18 @@ psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/001-create-refr
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/002-drive-schema.sql
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/003-drive-tasks-schema.sql
 psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/004-sharing-folders.sql
+# ... 005 through 010 (rate limits, RBAC, mail permissions) ...
+psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/011-backup-schema.sql
+psql -h YOUR_DB_HOST -U dovecot_user -d mailserver -f migrations/012-create-user-support.sql
 ```
+
+Migrations 011/012 must be applied **in that order** and before installing
+`homelab-backup-server`/`homelab-backup-client` anywhere — those packages assume
+`/api/v1/backup/*` and `POST /api/v1/admin/users` already exist. See
+`migrations/011-backup-schema.sql`'s header comment for what it adds (the
+`backup` schema/role, plus `/api/v1/backup/*` endpoint permissions) and
+`migrations/012-create-user-support.sql`'s (the `create-user` admin endpoint's
+supporting grant + the `api.role_grant_permissions` table).
 
 ### Start Service
 

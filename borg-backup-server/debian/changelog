@@ -1,3 +1,42 @@
+homelab-backup-server (1.0.0) unstable; urgency=medium
+
+  * BREAKING: renamed from homelab-borg-service-backup-server to
+    homelab-backup-server (binary, package, config dir
+    /etc/homelab/homelab-borg-service-backup-server ->
+    /etc/homelab/backup/server, bash completion, man page). postinst
+    migrates an existing deployment's config dir forward automatically
+    on upgrade (old copy left in place as a rollback breadcrumb; the
+    borg repository itself is never touched).
+  * New `homelab-api` control-plane integration: client hosts now
+    enroll themselves via `homelab-cli backup enroll` instead of an
+    administrator running `enroll` here by hand for every host. This
+    server polls for pending enroll/revoke requests via the new
+    `reconcile` subcommand, run automatically by the new
+    homelab-backup-server-reconcile.timer (default every 5 minutes,
+    configurable via config.yml's reconcile.interval_minutes).
+    `reconcile` reuses the exact same authorized_keys-building/parsing
+    functions `enroll`/`revoke` always have, now writing
+    authorized_keys via write-to-temp-file + os.rename() for true
+    atomicity since the file is touched unattended on a timer.
+    `reconcile` fails soft (WARNING + exit 0, authorized_keys untouched)
+    on any control-plane error so an API outage can never disable the
+    timer via systemd's failure-count limits.
+  * New interactive `setup` subcommand: connects this server to the
+    homelab-api control plane (bootstrapping its own service account if
+    needed), registers this host as the backup server via `homelab-cli
+    backup set-server-info`, and installs/enables the reconcile timer.
+    `postinst` stays non-interactive/skeleton-only, same division of
+    labor homelab-backup-client already uses between postinst and its
+    own setup.
+  * New hard dependency on homelab-cli (the reconcile job and `setup`
+    both shell out to it). Added Replaces:/Breaks: against the old
+    package name; Conflicts: borgbackup2 kept as-is.
+  * `enroll`/`list`/`revoke`/`admin-recovery-key` are unchanged and
+    remain available for manual/emergency use even with the
+    reconciliation job in place.
+
+ -- Gardner <gardner@homelab>  Sat, 29 Aug 2026 11:00:00 -0500
+
 homelab-borg-service-backup-server (0.2.5) unstable; urgency=medium
 
   * Fix: the borgbackup system user was created with --shell

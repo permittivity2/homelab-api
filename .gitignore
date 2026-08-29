@@ -93,7 +93,7 @@ dns-server/debian/files
 dns-server/debian/*.substvars
 dns-server/debian/*.debhelper.log
 dns-server/debian/*.debhelper
-borg-backup-client/debian/homelab-borg-service-backup-client/
+borg-backup-client/debian/homelab-backup-client/
 borg-backup-client/debian/.debhelper/
 borg-backup-client/debian/debhelper-build-stamp
 borg-backup-client/debian/files
@@ -101,7 +101,7 @@ borg-backup-client/debian/*.substvars
 borg-backup-client/debian/*.debhelper.log
 borg-backup-client/debian/*.debhelper
 borg-backup-client/.pytest_cache/
-borg-backup-server/debian/homelab-borg-service-backup-server/
+borg-backup-server/debian/homelab-backup-server/
 borg-backup-server/debian/.debhelper/
 borg-backup-server/debian/debhelper-build-stamp
 borg-backup-server/debian/files
@@ -111,3 +111,5 @@ borg-backup-server/debian/*.debhelper
 *.deb
 *.buildinfo
 *.changes
+__pycache__/
+*.pyc

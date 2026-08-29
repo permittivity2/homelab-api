@@ -60,13 +60,30 @@ def find_insertion_point(lines, path):
     return j, item_indent
 
 
+# Old field names, from before the borg_backup_server -> backup_server
+# rename (see CLAUDE.md/the redesign plan's config-path migration
+# section). A config.yml copied forward from the legacy package via
+# install.sh's migrate_legacy_config_dir() still uses these until the
+# admin re-runs `setup`; this fallback keeps cfg_get() from silently
+# returning "" for it in the meantime. One release cycle only.
+_LEGACY_KEY_ALIASES = {
+    ("backup_server",): ("borgbackup_server",),
+    ("ssh_backup_server_username",): ("ssh_borgbackup_server_username",),
+    ("backup_server_location",): ("borgbackup_server_backup_location",),
+}
+
+
 def cmd_get(path_file, keys):
     with open(path_file) as f:
         lines = f.readlines()
     i, _ = find_line(lines, keys)
     if i is None:
-        print("")
-        return
+        legacy = _LEGACY_KEY_ALIASES.get(tuple(keys))
+        if legacy:
+            i, _ = find_line(lines, legacy)
+        if i is None:
+            print("")
+            return
     value = lines[i].split(":", 1)[1].strip()
     value = value.strip('"').strip("'")
     if value in ("[]", "{}", "~", "null", "None"):

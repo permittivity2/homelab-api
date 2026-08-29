@@ -16,5 +16,15 @@ def _load(module_name, script_path):
     loader.exec_module(module)
 
 
-_load("homelab_borg_service_backup_client", REPO_ROOT / "bin" / "homelab-borg-service-backup-client")
-_load("homelab_borg_service_backup_server", REPO_ROOT.parent / "borg-backup-server" / "homelab-borg-service-backup-server")
+_load("homelab_backup_client", REPO_ROOT / "bin" / "homelab-backup-client")
+
+# The sibling borg-backup-server package is out of scope for this
+# package's own rewrite (a separate effort owns it) -- loaded under both
+# its old and new module name here since tests/test_server.py (also out
+# of scope) may reference either depending on how far along that rename
+# is when this runs.
+_SERVER_SCRIPT = REPO_ROOT.parent / "borg-backup-server" / "homelab-backup-server"
+if not _SERVER_SCRIPT.exists():
+    _SERVER_SCRIPT = REPO_ROOT.parent / "borg-backup-server" / "homelab-borg-service-backup-server"
+_load("homelab_backup_server", _SERVER_SCRIPT)
+_load("homelab_borg_service_backup_server", _SERVER_SCRIPT)

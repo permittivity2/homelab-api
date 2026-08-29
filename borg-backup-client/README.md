@@ -1,62 +1,84 @@
-# homelab-borg-service-backup
+# homelab-backup-client / homelab-backup-server
 
 Two packages, one source repo, built on classic **borg** (1.x):
 
-- **`homelab-borg-service-backup-client`** — installed on every host being
-  backed up. Pushes encrypted archives to a centralized backup server
-  over SSH. Driven entirely by a per-host config in
-  `/etc/homelab/borgbackup/` and run under systemd (timer for periodic
-  schedules, a long-running service for continuous mode).
-- **`homelab-borg-service-backup-server`** — installed once, on the
-  centralized backup server. Creates the `borgbackup` system user/group
-  and backup directory, and provides `enroll`/`list`/`revoke` to manage
-  which clients can reach it. Clients never need SSH or sudo access to
-  this host to onboard — an administrator runs `enroll` locally on the
-  server using the client's own printed public key.
+- **`homelab-backup-client`** — installed on every host being backed up.
+  Pushes encrypted archives to a centralized backup server over SSH.
+  Driven entirely by a per-host config in `/etc/homelab/backup/client/`
+  and run under systemd (timer for periodic schedules, a long-running
+  service for continuous mode).
+- **`homelab-backup-server`** — installed once, on the centralized
+  backup server. Creates the `borgbackup` system user/group and backup
+  directory, and applies enrollment/revocation requests to its own
+  `authorized_keys` via a periodic reconciliation job (or the manual
+  `enroll`/`list`/`revoke` commands, kept as an emergency fallback).
 
-This tool exists to help an administrator restore a homelab **service's
-config** (guaranteed to live under `/etc/homelab/<component>/`) or an
-entire server to a point in time after a disaster. It is not a user-data
+This tool exists to let an administrator restore a homelab host's
+**config or data** to a point in time after a disaster — general
+homelab-recovery backup, not narrowly `/etc/homelab/*` config only (see
+`mode:` below), and not a general end-user-data (Drive files, mailboxes)
 backup tool.
+
+## Control plane: homelab-api / homelab-cli
+
+Both packages authenticate to `homelab-api` as their own service
+account, via `homelab-cli`, in their own isolated `--config` directory
+(so a service account's session never collides with a human's). This
+replaces two things the previous `homelab-borg-service-backup-*`
+packages did differently:
+
+- **Enrollment** used to require a human to run `enroll <identifier>
+  <pubkey>` on the backup server by hand for every client. Now, `setup`
+  on the client just submits its pubkey via `homelab-cli backup enroll`
+  once; `homelab-backup-server`'s own reconciliation job (running on its
+  own timer) polls for pending enrollments/revocations and applies them
+  to `authorized_keys` automatically. No SSH or sudo access to the
+  backup server is ever needed from the client side, same as before —
+  onboarding is just no longer a manual step.
+- **Run-history reporting** used to have the client write directly to a
+  PostgreSQL database with its own dedicated credentials. Now it reports
+  through `homelab-cli backup report-run`/`report-check` instead,
+  reusing the same identity layer every other `homelab-*` package
+  standardizes on. Still best-effort: a control-plane hiccup only logs a
+  warning, never fails or blocks an actual backup.
+
+`homelab_cli.disabled: true` in a client's config.yml opts it out of the
+control plane entirely (requires `backup_server` to be set explicitly,
+since server discovery also goes through homelab-cli).
 
 ## Server setup
 
 ```
-sudo apt install ./homelab-borg-service-backup-server_*.deb
+sudo apt install ./homelab-backup-server_*.deb
+sudo homelab-backup-server setup
 ```
 
-This is non-interactive and idempotent (safe to re-run/upgrade). It:
+`setup` is interactive (backup-server hostname/IP, control-plane account,
+reconciliation interval) and idempotent (safe to re-run). It:
 
 1. Installs `borgbackup` (the `Conflicts: borgbackup2` in
    `debian/control` prevents the v1/v2 binary-name mismatch that used to
    break every client backup with `sh: 1: borg: not found`).
 2. Creates the `borgbackup` system user/group (no login shell) if
-   missing.
-3. Creates the backup directory (default `/var/borgbackup`), owned by
-   `borgbackup`.
-4. Creates `/etc/homelab/homelab-borg-service-backup-server/config.yml`
-   (only if missing) recording `backup_user`/`backup_location` — edit
-   this to point at a different path (e.g. an existing deployment still
-   using `/mnt/borgbackup`).
-5. Creates `~borgbackup/.ssh/authorized_keys`, empty and correctly
-   permissioned, ready for `enroll`.
+   missing, and the backup directory (default `/var/borgbackup`), owned
+   by `borgbackup`.
+3. Establishes this server's own homelab-cli session (prompting for the
+   control-plane account if not already logged in) and registers itself
+   via `homelab-cli backup set-server-info` — this is what lets a
+   never-before-enrolled client discover which server to talk to.
+4. Installs and enables `homelab-backup-server-reconcile.timer`, which
+   polls for pending enrollments/revocations and applies them to
+   `~borgbackup/.ssh/authorized_keys`.
 
-Onboard a client once you have its identifier and public key (both
-printed by the client's `configure` step below):
-
-```
-sudo homelab-borg-service-backup-server enroll <identifier> '<pubkey>'
-```
-
-Also available: `homelab-borg-service-backup-server list` (show enrolled
-identifiers) and `... revoke <identifier>` (remove a client's access,
-e.g. when decommissioning a host).
+`enroll`/`list`/`revoke`/`admin-recovery-key` remain available as
+manual/emergency-fallback commands even with the reconciliation job
+running.
 
 ## Client install
 
 ```
-sudo apt install ./homelab-borg-service-backup-client_*.deb
-sudo homelab-borg-service-backup-client setup
+sudo apt install ./homelab-backup-client_*.deb
+sudo homelab-backup-client setup
 ```
 
 (Or, for a non-packaged install: `sudo ./install/install.sh`.)
@@ -64,35 +86,41 @@ sudo homelab-borg-service-backup-client setup
 This is interactive and root-only. It will:
 
 1. Check for/install `borgbackup`, `python3-yaml`, `python3-systemd`,
-   `postgresql-client`.
-2. Create `/etc/homelab/borgbackup/config.yml` from
-   `config/config.example.yml` (only if it doesn't already exist).
-3. Prompt for anything required but unset: `borgbackup_server`, backup
-   mode, schedule. A per-host encryption passphrase is **generated
-   automatically** (see Encryption & key escrow below) — pass
-   `--passphrase-file FILE` to supply your own instead.
+   `homelab-cli`.
+2. Create `/etc/homelab/backup/client/config.yml` from
+   `config/config.example.yml` (only if it doesn't already exist) — or,
+   if this host still has the pre-rename
+   `/etc/homelab/borgbackup/` config from
+   `homelab-borg-service-backup-client`, copy it forward instead (SSH
+   keypair and repo passphrase are never regenerated; the old copy is
+   left in place, not deleted).
+3. Prompt for anything required but unset: backup mode, schedule.
+   `backup_server` is optional — leave it blank to auto-discover via
+   `homelab-cli backup server-info` at run time. A per-host encryption
+   passphrase is **generated automatically** (see Encryption & key
+   escrow below) — pass `--passphrase-file FILE` to supply your own
+   instead.
 4. If mode is `homelab_only`, pre-populate `homelab_only.paths`/
    `databases` by detecting installed `homelab-*` packages.
-5. Generate a dedicated SSH key (`/etc/homelab/borgbackup/ssh/`). If
-   trust to the backup server isn't already established, it prints the
-   exact `enroll` command above (with this host's identifier and public
-   key filled in) for an administrator to run **on the backup server**,
-   then offers to re-check once that's done — no SSH or sudo access to
-   the backup server is ever needed from the client side.
-6. Install the script to `/usr/local/sbin/homelab-borg-service-backup-client` and the
+5. Generate a dedicated SSH key (`/etc/homelab/backup/client/ssh/`), log
+   in to homelab-api (if not already validated), and submit
+   `homelab-cli backup enroll` with this host's identifier/pubkey — no
+   admin action needed on the backup server; it's picked up by that
+   server's own reconciliation timer within a few minutes.
+6. Install the script to `/usr/local/sbin/homelab-backup-client` and the
    appropriate systemd unit(s), then enable+start them.
 7. Print a one-time summary telling you exactly what to escrow and
    where, if a new passphrase was generated.
 
-Re-run `install.sh` any time to pick up a changed `schedule.mode` (it
-regenerates the systemd units) — it will not overwrite an existing
+Re-run `install.sh`/`setup` any time to pick up a changed `schedule.mode`
+(it regenerates the systemd units) — it will not overwrite an existing
 `config.yml` or SSH key.
 
 ## Uninstall
 
 ```
 sudo ./install/uninstall.sh          # stops/removes units + binary, keeps config
-sudo ./install/uninstall.sh --purge  # also removes /etc/homelab/borgbackup entirely
+sudo ./install/uninstall.sh --purge  # also removes /etc/homelab/backup/client entirely
 ```
 
 ## Encryption & key escrow
@@ -102,13 +130,12 @@ inside the repo itself, so it travels with it wherever the repo is
 replicated) protected by a **passphrase unique to that host**, generated
 automatically by `install.sh`. Leaving `encryption.passphrase` blank is
 a hard error unless `encryption.allow_unencrypted: true` is explicitly
-set — silent unencrypted backups are not the default, because
-`/etc/homelab/*` configs routinely contain database passwords and API
-keys.
+set — silent unencrypted backups are not the default, since this tool
+can back up anything up to and including a full host, secrets and all.
 
 On top of the passphrase, the first successful backup run also exports
 the repo's key independently via `borg key export` into
-`/etc/homelab/borgbackup/key-escrow/<identifier>.key` (plus a
+`/etc/homelab/backup/client/key-escrow/<identifier>.key` (plus a
 `--paper` printable copy at `<identifier>-paper.txt`). This is a safety
 net against repo metadata damage, not a substitute for the passphrase.
 
@@ -126,12 +153,12 @@ problem.
 
 ## Restoring onto a fresh/replacement host
 
-Run once, on the backup server (part of the
-`homelab-borg-service-backup-server` package, not per client host), to
-generate a broader-scoped **admin recovery key**:
+Run once, on the backup server (part of the `homelab-backup-server`
+package, not per client host), to generate a broader-scoped **admin
+recovery key**:
 
 ```
-sudo homelab-borg-service-backup-server admin-recovery-key
+sudo homelab-backup-server admin-recovery-key
 ```
 
 This key can `list`/`extract` **any** host's repo under
@@ -151,15 +178,15 @@ Disaster recovery runbook, once a host is gone and you're rebuilding it
    and the admin recovery key from step above.
 3. List what's available:
    ```
-   homelab-borg-service-backup-client list-archives \
-       --host <original-identifier> --server <borgbackup_server> \
+   homelab-backup-client list-archives \
+       --host <original-identifier> --server <backup-server-address> \
        --ssh-key /path/to/admin-recovery/id_ed25519 \
        --passphrase-file /path/to/escrowed-passphrase
    ```
 4. Extract into a staging directory (never straight onto `/`):
    ```
-   homelab-borg-service-backup-client restore \
-       --host <original-identifier> --server <borgbackup_server> \
+   homelab-backup-client restore \
+       --host <original-identifier> --server <backup-server-address> \
        --ssh-key /path/to/admin-recovery/id_ed25519 \
        --passphrase-file /path/to/escrowed-passphrase \
        --archive <archive-name> --target /var/tmp/restore
@@ -169,31 +196,24 @@ Disaster recovery runbook, once a host is gone and you're rebuilding it
 
 `--host`/`--server`/`--ssh-user`/`--location`/`--ssh-key`/
 `--passphrase-file` on `list-archives`/`restore` all fall back to the
-local `config.yml` when omitted, so restoring a specific file on a
-still-alive host (no disaster involved) just needs
-`homelab-borg-service-backup-client list-archives` / `restore --archive
-... --target ...` with no overrides.
+local `config.yml` (and, beyond that, homelab-cli server discovery) when
+omitted, so restoring a specific file on a still-alive host (no disaster
+involved) just needs `homelab-backup-client list-archives` / `restore
+--archive ... --target ...` with no overrides.
 
-## Run history database (optional)
+## Run-history reporting (optional, via homelab-cli)
 
-`install.sh`/`configure` asks whether to record each `backup`/`check`
-run to a PostgreSQL database — off by default. If enabled, it:
+Unless `homelab_cli.disabled: true` is set, every `backup`/`check` run
+reports its outcome via `homelab-cli backup report-run`/`report-check`:
+status, timing, and — for backups, via `borg create --json` — real
+original/compressed/deduplicated size and file count. Query it back out
+with `homelab-cli backup host-runs <identifier>`.
 
-1. Collects host, port, database name (default `homelab`), user, and
-   password, and installs `python3-psycopg2` on demand.
-2. Creates the database if it doesn't already exist, then applies
-   `install/schema.sql` (idempotent — safe to re-run).
-3. From then on, every `backup`/`check` run writes one row recording
-   what happened: status, timing, and — for backups, via `borg create
-   --json` — real original/compressed/deduplicated size and file count.
-
-Tables live in a dedicated `service_backup` Postgres schema (not
-`public`) inside the `homelab` database, so other `homelab-*` packages
-sharing that database later don't collide on table names. **This is
-write-only for now** — there is no API or CLI to read this data back
-out yet; that's an intentionally separate, later phase. A database
-error (unreachable host, bad credentials, `psycopg2` missing) only ever
-logs a warning — it never fails or blocks an actual backup.
+**This never touches Postgres directly** — homelab-api owns the schema
+and all writes go through its REST API, authenticated as this host's own
+service-account session. A reporting failure (control-plane outage, bad
+session, etc.) only ever logs a warning — it never fails or blocks an
+actual backup.
 
 ## Config reference
 
@@ -206,6 +226,12 @@ points:
   logs to journald and exits cleanly (exit 0) rather than guessing.
 - **mode**: `full_host` | `local_only` | `homelab_only` | `specific`.
   `exclude:` (regex list) applies on top of whichever mode is chosen.
+- **backup_server** / **ssh_backup_server_username** /
+  **backup_server_location**: all optional. Leave `backup_server` blank
+  to auto-discover via `homelab-cli backup server-info`; set it
+  explicitly to hardcode a server (keeps working through a homelab-api
+  outage, or lets you opt out of the control plane with
+  `homelab_cli.disabled: true`).
 - **schedule.mode**: `hourly` | `daily` | `weekly` | `monthly` |
   `calendar` (raw systemd `OnCalendar=` expression) | `continuous`
   (script loops immediately after each successful run; no timer).
@@ -216,8 +242,8 @@ points:
   every re-run (clear both to re-roll). On top of that, every
   timer-driven mode (including `hourly`/`calendar`) gets an additional
   `RandomizedDelaySec` from `schedule.jitter_seconds` (default 1800).
-  Together this keeps a fleet of hosts from all hitting
-  `borgbackup_server` at once.
+  Together this keeps a fleet of hosts from all hitting the backup
+  server at once.
 - **retention**: `borg prune` runs after every successful backup using
   `keep_daily`/`keep_weekly`/`keep_monthly`/`keep_yearly`.
 - **encryption.passphrase**: auto-generated per host at install; see
@@ -228,19 +254,22 @@ points:
   separate from the backup schedule since a full check is slower and
   shouldn't block backups. A corrupted repo is only useful to discover
   before a real disaster recovery attempt needs it.
-- **database.enabled**: off by default; see Run history database above.
+- **homelab_cli.\***: control-plane config — `config_dir` (this host's
+  isolated homelab-cli session directory), `api_url`, `email`,
+  `password` (used once during setup, then cleared), `disabled`. See
+  Control plane above.
 
 ## Commands
 
 ```
-homelab-borg-service-backup-client backup [--dry-run] [--once] [--config PATH]
-homelab-borg-service-backup-client check [--config PATH]
-homelab-borg-service-backup-client list-archives [--host ID] [--server S] [--ssh-user U]
-                                                  [--location DIR] [--ssh-key PATH]
-                                                  [--passphrase-file PATH]
-homelab-borg-service-backup-client restore --archive NAME --target DIR [--paths ...]
-                                            [--dry-run] [same overrides as list-archives]
-homelab-borg-service-backup-client setup [--passphrase-file PATH]
+homelab-backup-client backup [--dry-run] [--once] [--config PATH]
+homelab-backup-client check [--config PATH]
+homelab-backup-client list-archives [--host ID] [--server S] [--ssh-user U]
+                                     [--location DIR] [--ssh-key PATH]
+                                     [--passphrase-file PATH]
+homelab-backup-client restore --archive NAME --target DIR [--paths ...]
+                               [--dry-run] [same overrides as list-archives]
+homelab-backup-client setup [--passphrase-file PATH]
 ```
 
 Running the binary with no subcommand (or one starting with a flag) is
@@ -250,8 +279,8 @@ invocations and the systemd units.
 ## Manual testing
 
 ```
-/usr/local/sbin/homelab-borg-service-backup-client backup --dry-run --once
-journalctl -t homelab-borg-service-backup-client -f
+/usr/local/sbin/homelab-backup-client backup --dry-run --once
+journalctl -t homelab-backup-client -f
 ```
 
 `--dry-run` prints the resolved sources, exclude patterns, and the exact
@@ -270,22 +299,20 @@ mode, host identifier resolution, repo URL construction, passphrase
 fallback order, the bare-args-means-`backup` command detection) and the
 server CLI (identifier validation, `authorized_keys` line construction/
 parsing, `enroll`/`revoke` idempotency) with no real `borg`/SSH/network/
-filesystem-user calls — the manual dry-run testing above covers
-integration-level behavior.
+filesystem-user/homelab-cli calls — the manual dry-run testing above
+covers integration-level behavior.
 
 ## Packaging
 
 One Debian source package (`debian/`) builds two binary packages —
-`homelab-borg-service-backup-client` and `homelab-borg-service-backup-server`
-— sharing a single changelog/version. A `build-package.sh` (modeled on
+`homelab-backup-client` and `homelab-backup-server` — sharing a single
+changelog/version. A `build-package.sh` (modeled on
 `homelab-api/build-package.sh`) builds both `.deb`s and publishes them to
 the same shared apt repository used by the rest of this homelab's
 `homelab-*` packages. See `debian/` and `build-package.sh` at the repo
 root.
 
-The server package's setup (user/group/directory/config) runs
-non-interactively from `postinst` — see Server setup above. The client
-package still requires running `homelab-borg-service-backup-client setup` (or
-`install.sh`, for a non-packaged install) once to set config values and
-print the `enroll` command for the server administrator — that step is
-interactive and doesn't fit a non-interactive `postinst`.
+Both packages require `homelab-cli` to be installed and reachable
+against a live `homelab-api` before their own `setup` can complete
+enrollment/registration — see the rollout order in the redesign plan if
+bootstrapping a brand-new environment from scratch.

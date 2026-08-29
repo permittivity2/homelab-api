@@ -19,17 +19,33 @@ from pathlib import Path
 import requests
 from requests_toolbelt.multipart.encoder import MultipartEncoder, MultipartEncoderMonitor
 
-CONFIG_DIR = Path.home() / ".config" / "homelab-cli"
-CONFIG_PATH = CONFIG_DIR / "config.json"
-SESSION_PATH = CONFIG_DIR / "session.json"
-
-
 # ---------------------------------------------------------------------------
 # Config / session file handling
 # ---------------------------------------------------------------------------
 
-def _secure_write_json(path, data):
-    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+def _config_dir(args):
+    """Resolves the config/session directory for this invocation: an
+    explicit --config flag, then $HOMELAB_CLI_CONFIG_DIR, then the default
+    ~/.config/homelab-cli. Service accounts (homelab-backup-client/-server)
+    pass --config with their own isolated directory so their session.json
+    never collides with a human's."""
+    if getattr(args, "config", None):
+        return Path(args.config).expanduser()
+    if os.environ.get("HOMELAB_CLI_CONFIG_DIR"):
+        return Path(os.environ["HOMELAB_CLI_CONFIG_DIR"]).expanduser()
+    return Path.home() / ".config" / "homelab-cli"
+
+
+def _config_path(args):
+    return _config_dir(args) / "config.json"
+
+
+def _session_path(args):
+    return _config_dir(args) / "session.json"
+
+
+def _secure_write_json(config_dir, path, data):
+    config_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f, indent=2)
@@ -43,25 +59,25 @@ def _read_json(path):
         return json.load(f)
 
 
-def load_config():
-    return _read_json(CONFIG_PATH) or {}
+def load_config(args):
+    return _read_json(_config_path(args)) or {}
 
 
-def save_config(data):
-    _secure_write_json(CONFIG_PATH, data)
+def save_config(args, data):
+    _secure_write_json(_config_dir(args), _config_path(args), data)
 
 
-def load_session():
-    return _read_json(SESSION_PATH)
+def load_session(args):
+    return _read_json(_session_path(args))
 
 
-def save_session(data):
-    _secure_write_json(SESSION_PATH, data)
+def save_session(args, data):
+    _secure_write_json(_config_dir(args), _session_path(args), data)
 
 
-def clear_session():
+def clear_session(args):
     try:
-        SESSION_PATH.unlink()
+        _session_path(args).unlink()
     except FileNotFoundError:
         pass
 
@@ -70,7 +86,7 @@ def resolve_api_url(args):
     if getattr(args, "api_url", None):
         return args.api_url.rstrip("/")
 
-    config = load_config()
+    config = load_config(args)
     if config.get("api_url"):
         return config["api_url"].rstrip("/")
 
@@ -80,12 +96,12 @@ def resolve_api_url(args):
         print("error: URL must start with http:// or https://", file=sys.stderr)
         sys.exit(1)
     config["api_url"] = url
-    save_config(config)
+    save_config(args, config)
     return url
 
 
-def get_session_or_die():
-    session = load_session()
+def get_session_or_die(args):
+    session = load_session(args)
     if not session:
         print("Not logged in. Run 'homelab-cli login' first.", file=sys.stderr)
         sys.exit(1)
@@ -99,7 +115,7 @@ def get_session_or_die():
 def _do_refresh(args):
     """Attempt one refresh using the cached refresh_token. Returns the new
     session dict on success, or None on failure (caller decides what to do)."""
-    session = load_session()
+    session = load_session(args)
     if not session or not session.get("refresh_token"):
         return None
 
@@ -118,7 +134,7 @@ def _do_refresh(args):
     new_session["refresh_token"] = body["refresh_token"]
     new_session["expires_in"] = body["expires_in"]
     new_session["obtained_at"] = time.time()
-    save_session(new_session)
+    save_session(args, new_session)
     return new_session
 
 
@@ -130,7 +146,7 @@ def _request(args, method, path, *, auth=True, is_refresh_retry=False, **kwargs)
 
     headers = kwargs.pop("headers", {}) or {}
     if auth:
-        session = get_session_or_die()
+        session = get_session_or_die(args)
         headers["Authorization"] = f"Bearer {session['token']}"
 
     resp = requests.request(method, url, headers=headers, timeout=60, **kwargs)
@@ -223,9 +239,25 @@ def _save_binary_response(resp, output_path, default_name):
 # ---------------------------------------------------------------------------
 
 def cmd_login(args):
+    non_interactive_password = args.password or args.password_stdin or args.password_env
+    if non_interactive_password and not args.email:
+        print("error: --email is required when using --password/--password-stdin/--password-env "
+              "(prompting for it would hang under a non-tty caller).", file=sys.stderr)
+        sys.exit(1)
     email = args.email or input("Email: ").strip()
-    import getpass
-    password = getpass.getpass("Password: ")
+
+    if args.password:
+        password = args.password
+    elif args.password_stdin:
+        password = sys.stdin.readline().rstrip("\n")
+    elif args.password_env:
+        password = os.environ.get(args.password_env)
+        if password is None:
+            print(f"error: environment variable {args.password_env} is not set", file=sys.stderr)
+            sys.exit(1)
+    else:
+        import getpass
+        password = getpass.getpass("Password: ")
 
     api_url = resolve_api_url(args)
     resp = requests.post(
@@ -237,7 +269,7 @@ def cmd_login(args):
         _die_with_error(resp)
 
     body = resp.json()
-    save_session({
+    save_session(args, {
         "token": body["token"],
         "refresh_token": body["refresh_token"],
         "expires_in": body["expires_in"],
@@ -249,7 +281,7 @@ def cmd_login(args):
 
 
 def cmd_logout(args):
-    session = load_session()
+    session = load_session(args)
     if session and session.get("refresh_token"):
         api_url = resolve_api_url(args)
         try:
@@ -263,20 +295,20 @@ def cmd_logout(args):
         except requests.RequestException as exc:
             print(f"warning: server logout call failed: {exc}", file=sys.stderr)
 
-    clear_session()
+    clear_session(args)
     print("Logged out.")
     return 0
 
 
 def cmd_configure(args):
-    config = load_config()
+    config = load_config(args)
     if args.set_api_url:
         url = args.set_api_url.rstrip("/")
         if not url.startswith("http://") and not url.startswith("https://"):
             print("error: URL must start with http:// or https://", file=sys.stderr)
             return 1
         config["api_url"] = url
-        save_config(config)
+        save_config(args, config)
         print(f"API URL set to {url}")
     else:
         print(config.get("api_url", "(not set)"))
@@ -337,7 +369,7 @@ def cmd_mail_message(args):
 
 
 def cmd_mail_part(args):
-    session = get_session_or_die()
+    session = get_session_or_die(args)
     api_url = resolve_api_url(args)
     params = {"folder": args.folder, "part": args.part}
     resp = requests.get(
@@ -432,7 +464,7 @@ def _build_mail_message(args):
 
 
 def _send_mail_multipart(args, path):
-    session = get_session_or_die()
+    session = get_session_or_die(args)
     api_url = resolve_api_url(args)
     url = f"{api_url}{path}"
     message = _build_mail_message(args)
@@ -525,7 +557,7 @@ def cmd_file_info(args):
 
 
 def cmd_upload_file(args):
-    session = get_session_or_die()
+    session = get_session_or_die(args)
     api_url = resolve_api_url(args)
     url = f"{api_url}/api/v1/drive/files"
 
@@ -569,7 +601,7 @@ def cmd_file_meta(args):
 
 
 def cmd_download_file(args):
-    session = get_session_or_die()
+    session = get_session_or_die(args)
     api_url = resolve_api_url(args)
     params = {"version": args.version} if args.version else {}
     resp = requests.get(
@@ -760,6 +792,107 @@ def cmd_admin_force_relogin(args):
     return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/force-relogin"))
 
 
+def cmd_admin_create_user(args):
+    body = {"email": args.email, "role": args.role}
+    if args.quota_mb is not None:
+        body["quota_mb"] = args.quota_mb
+    return _print_response(_request(args, "POST", "/api/v1/admin/users", json=body))
+
+
+# ---------------------------------------------------------------------------
+# Backup control-plane handlers
+# ---------------------------------------------------------------------------
+
+def _read_pubkey(args):
+    if args.pubkey_file:
+        with open(args.pubkey_file) as f:
+            return f.read().strip()
+    return args.pubkey
+
+
+def cmd_backup_enroll(args):
+    body = {"identifier": args.identifier, "hostname": args.hostname, "pubkey": _read_pubkey(args)}
+    return _print_response(_request(args, "POST", "/api/v1/backup/enroll", json=body))
+
+
+def cmd_backup_list_pending_enrollments(args):
+    params = {"action": args.action} if args.action else {}
+    return _print_response(_request(args, "GET", "/api/v1/backup/enrollments", params=params))
+
+
+def cmd_backup_ack_enrollment(args):
+    body = {}
+    if args.repo_ssh_user or args.repo_server or args.repo_location:
+        body["repo"] = {
+            "ssh_user": args.repo_ssh_user,
+            "server": args.repo_server,
+            "location": args.repo_location,
+        }
+    return _print_response(_request(args, "POST", f"/api/v1/backup/enrollments/{args.id}/ack", json=body))
+
+
+def cmd_backup_revoke_host(args):
+    return _print_response(_request(args, "POST", f"/api/v1/backup/hosts/{args.identifier}/revoke"))
+
+
+def cmd_backup_report_run(args):
+    body = {
+        "identifier": args.identifier,
+        "mode": args.mode,
+        "started_at": args.started_at,
+        "finished_at": args.finished_at,
+        "status": args.status,
+    }
+    if args.archive_name is not None:
+        body["archive_name"] = args.archive_name
+    if args.original_size is not None:
+        body["original_size_bytes"] = args.original_size
+    if args.compressed_size is not None:
+        body["compressed_size_bytes"] = args.compressed_size
+    if args.deduplicated_size is not None:
+        body["deduplicated_size_bytes"] = args.deduplicated_size
+    if args.file_count is not None:
+        body["file_count"] = args.file_count
+    if args.error_message is not None:
+        body["error_message"] = args.error_message
+    return _print_response(_request(args, "POST", "/api/v1/backup/runs", json=body))
+
+
+def cmd_backup_report_check(args):
+    body = {
+        "identifier": args.identifier,
+        "started_at": args.started_at,
+        "finished_at": args.finished_at,
+        "status": args.status,
+    }
+    if args.error_message is not None:
+        body["error_message"] = args.error_message
+    return _print_response(_request(args, "POST", "/api/v1/backup/checks", json=body))
+
+
+def cmd_backup_list_hosts(args):
+    return _print_response(_request(args, "GET", "/api/v1/backup/hosts"))
+
+
+def cmd_backup_list_repos(args):
+    params = {"identifier": args.identifier} if args.identifier else {}
+    return _print_response(_request(args, "GET", "/api/v1/backup/repos", params=params))
+
+
+def cmd_backup_host_runs(args):
+    params = {"limit": args.limit} if args.limit else {}
+    return _print_response(_request(args, "GET", f"/api/v1/backup/hosts/{args.identifier}/runs", params=params))
+
+
+def cmd_backup_server_info(args):
+    return _print_response(_request(args, "GET", "/api/v1/backup/server-info"))
+
+
+def cmd_backup_set_server_info(args):
+    body = {"hostname": args.hostname, "ssh_user": args.ssh_user, "backup_location": args.location}
+    return _print_response(_request(args, "POST", "/api/v1/backup/server-info", json=body))
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -775,6 +908,14 @@ def build_parser():
         metavar="URL",
         help="Override the API base URL for this invocation only (never persisted; "
              "use 'configure --set-api-url' to change it permanently).",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="DIR",
+        help="Override the config/session directory for this invocation (default: "
+             "~/.config/homelab-cli, or $HOMELAB_CLI_CONFIG_DIR if set). Required for "
+             "service-account use (e.g. homelab-backup-client/-server) so each caller's "
+             "session.json doesn't collide with a human's.",
     )
 
     sub = parser.add_subparsers(dest="command", required=True, metavar="command")
@@ -801,6 +942,19 @@ def build_parser():
     # --- Session / configuration ---
     p = add("login", cmd_login, "Log in and save a session for later commands.")
     p.add_argument("--email", help="Account email. Prompted if omitted.")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "--password", help="Password (visible in process listings — prefer "
+        "--password-stdin or --password-env for scripted/service-account use).",
+    )
+    g.add_argument(
+        "--password-stdin", action="store_true",
+        help="Read the password from stdin (one line).",
+    )
+    g.add_argument(
+        "--password-env", metavar="VAR",
+        help="Read the password from environment variable VAR.",
+    )
 
     add("logout", cmd_logout, "Log out and clear the saved local session.")
 
@@ -1114,6 +1268,90 @@ def build_parser():
     p = admin("force-relogin", cmd_admin_force_relogin,
               "Force a user to re-login (identical action to revoke-tokens).")
     p.add_argument("email", help="Target account email.")
+
+    p = admin(
+        "create-user", cmd_admin_create_user,
+        "Create a dovecot.users account (idempotent) and assign it an initial role.",
+        description="Generates a random server-side password and prints it once, exactly "
+                     "like 'admin reset-password' — never accepts a client-supplied "
+                     "password. If the account already exists, no password is generated; "
+                     "the role is still (idempotently) assigned.",
+    )
+    p.add_argument("email", help="Account email to create.")
+    p.add_argument("--role", required=True, help="Initial role to assign (e.g. user, backup, site_admin).")
+    p.add_argument("--quota-mb", type=int, help="Mail quota in MB. Default: 1024.")
+
+    # --- Backup control plane ---
+    backup = add_group(
+        "backup", "Backup control-plane operations (enrollment, run reporting, host/repo visibility)."
+    )
+
+    p = backup("enroll", cmd_backup_enroll, "Submit this host's pubkey for backup-server enrollment.")
+    p.add_argument("--identifier", required=True, help="This host's backup identifier.")
+    p.add_argument("--hostname", required=True, help="This host's hostname.")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--pubkey", help="Public key contents.")
+    g.add_argument("--pubkey-file", help="Path to a public key file.")
+
+    p = backup(
+        "list-pending-enrollments", cmd_backup_list_pending_enrollments,
+        "List pending enrollment/revocation requests (polled by homelab-backup-server).",
+    )
+    p.add_argument("--action", choices=["enroll", "revoke"], help="Filter by action. Default: both.")
+
+    p = backup(
+        "ack-enrollment", cmd_backup_ack_enrollment,
+        "Mark a pending enrollment/revocation as applied.",
+    )
+    p.add_argument("id", help="Enrollment request id.")
+    p.add_argument("--repo-ssh-user", help="Repo SSH user (enroll acks only).")
+    p.add_argument("--repo-server", help="Repo server hostname (enroll acks only).")
+    p.add_argument("--repo-location", help="Repo location path (enroll acks only).")
+
+    p = backup("revoke-host", cmd_backup_revoke_host, "Queue a pending revocation for a host.")
+    p.add_argument("identifier", help="Host identifier to revoke.")
+
+    p = backup("report-run", cmd_backup_report_run, "Report a completed backup run.")
+    p.add_argument("--identifier", required=True, help="This host's backup identifier.")
+    p.add_argument("--mode", required=True, choices=["full_host", "local_only", "homelab_only", "specific"])
+    p.add_argument("--started-at", required=True, help="ISO 8601 timestamp.")
+    p.add_argument("--finished-at", required=True, help="ISO 8601 timestamp.")
+    p.add_argument("--status", required=True, choices=["success", "warning", "failure"])
+    p.add_argument("--archive-name", help="Borg archive name.")
+    p.add_argument("--original-size", type=int, help="Original size in bytes.")
+    p.add_argument("--compressed-size", type=int, help="Compressed size in bytes.")
+    p.add_argument("--deduplicated-size", type=int, help="Deduplicated size in bytes.")
+    p.add_argument("--file-count", type=int, help="Number of files backed up.")
+    p.add_argument("--error-message", help="Error message, if any.")
+
+    p = backup("report-check", cmd_backup_report_check, "Report a completed integrity check run.")
+    p.add_argument("--identifier", required=True, help="This host's backup identifier.")
+    p.add_argument("--started-at", required=True, help="ISO 8601 timestamp.")
+    p.add_argument("--finished-at", required=True, help="ISO 8601 timestamp.")
+    p.add_argument("--status", required=True, choices=["success", "failure"])
+    p.add_argument("--error-message", help="Error message, if any.")
+
+    backup("list-hosts", cmd_backup_list_hosts, "List all enrolled backup hosts.")
+
+    p = backup("list-repos", cmd_backup_list_repos, "List registered backup repos.")
+    p.add_argument("--identifier", help="Filter to one host. Default: all hosts.")
+
+    p = backup("host-runs", cmd_backup_host_runs, "Show a host's recent backup run history.")
+    p.add_argument("identifier", help="Host identifier.")
+    p.add_argument("--limit", type=int, help="Max runs to return. Default: 20.")
+
+    backup(
+        "server-info", cmd_backup_server_info,
+        "Discover the current backup server's hostname/ssh-user/location.",
+    )
+
+    p = backup(
+        "set-server-info", cmd_backup_set_server_info,
+        "Register this host as the backup server (called by homelab-backup-server's own setup).",
+    )
+    p.add_argument("--hostname", required=True, help="Reachable hostname/IP for backup clients to use.")
+    p.add_argument("--ssh-user", required=True, help="SSH user backup clients should connect as.")
+    p.add_argument("--location", required=True, help="Backup storage location path on the server.")
 
     return parser
 

@@ -1,25 +1,25 @@
-# bash completion for homelab-borg-service-backup-client
+# bash completion for homelab-backup-client
 #
 # Subcommand names and per-command flags below are hand-kept in sync with
-# bin/homelab-borg-service-backup-client's argparse definitions (there is
-# no code-generation step) -- if a subcommand or flag is added there,
-# mirror it here too. See borg-backup-server/completions/ for the sibling
+# bin/homelab-backup-client's argparse definitions (there is no
+# code-generation step) -- if a subcommand or flag is added there, mirror
+# it here too. See borg-backup-server/completions/ for the sibling
 # pattern this is modeled on.
 
-_homelab_borg_service_backup_client_commands="backup check list-archives restore configure setup"
+_homelab_backup_client_commands="backup check list-archives restore configure setup"
 
 # Flags whose value is a local filesystem path, across all subcommands.
-_homelab_borg_service_backup_client_path_flags="--config --ssh-key --passphrase-file --target"
+_homelab_backup_client_path_flags="--config --ssh-key --passphrase-file --target"
 
-_homelab_borg_service_backup_client_is_path_flag() {
+_homelab_backup_client_is_path_flag() {
     local flag="$1" f
-    for f in $_homelab_borg_service_backup_client_path_flags; do
+    for f in $_homelab_backup_client_path_flags; do
         [[ "$flag" == "$f" ]] && return 0
     done
     return 1
 }
 
-_homelab_borg_service_backup_client_filecomplete() {
+_homelab_backup_client_filecomplete() {
     if declare -F _filedir >/dev/null 2>&1; then
         _filedir
     else
@@ -27,14 +27,14 @@ _homelab_borg_service_backup_client_filecomplete() {
     fi
 }
 
-_homelab_borg_service_backup_client_completions() {
+_homelab_backup_client_completions() {
     local cur prev command i word
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    if _homelab_borg_service_backup_client_is_path_flag "$prev"; then
-        _homelab_borg_service_backup_client_filecomplete
+    if _homelab_backup_client_is_path_flag "$prev"; then
+        _homelab_backup_client_filecomplete
         return 0
     fi
 
@@ -48,7 +48,7 @@ _homelab_borg_service_backup_client_completions() {
     done
 
     if [[ -z "$command" ]]; then
-        COMPREPLY=( $(compgen -W "-h --help $_homelab_borg_service_backup_client_commands" -- "$cur") )
+        COMPREPLY=( $(compgen -W "-h --help $_homelab_backup_client_commands" -- "$cur") )
         return 0
     fi
 
@@ -78,4 +78,4 @@ _homelab_borg_service_backup_client_completions() {
     return 0
 }
 
-complete -F _homelab_borg_service_backup_client_completions homelab-borg-service-backup-client
+complete -F _homelab_backup_client_completions homelab-backup-client

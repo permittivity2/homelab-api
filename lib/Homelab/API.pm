@@ -8,6 +8,7 @@ use Homelab::RateLimit;
 use Homelab::Drive;
 use Homelab::Mail;
 use Homelab::Roles;
+use Homelab::Backup;
 use Homelab::Utils::Password qw(hash_password);
 use Homelab::Utils::Passphrase qw(generate_passphrase);
 use YAML::XS qw(LoadFile);
@@ -20,6 +21,7 @@ my $limiter = Homelab::RateLimit->new($db);
 my $drive = Homelab::Drive->new($db, $config);
 my $mail = Homelab::Mail->new($db, $config);
 my $roles = Homelab::Roles->new($db, $config);
+my $backup = Homelab::Backup->new($db, $config);
 
 sub _set_json_response {
     my ($c, $data, $status) = @_;
@@ -222,7 +224,7 @@ get '/api/v1/auth/validate' => sub ($c) {
 
     return _set_json_response(
         $c,
-        { success => 1, valid => 1, user => { email => $email } },
+        { success => 1, valid => 1, user => { email => $email, roles => $roles->user_roles($email) } },
         200
     );
 };
@@ -957,6 +959,87 @@ $m->get('/allowed-senders' => sub ($c) {
     return _set_json_response($c, $result, $result->{error} ? 502 : 200);
 });
 
+# Backup control-plane routes — gated by the ordinary dynamic
+# api.role_permissions table (NOT the hardcoded site_admin bypass the
+# /api/v1/admin/* bridge below uses), same as Drive/Mail. Callers are
+# homelab-backup-client/-server service accounts holding the `backup` role
+# (seeded by migration 011), plus site_admin for operational visibility.
+#
+# This is control-plane only: identity, enrollment reconciliation, server
+# discovery, run-history bookkeeping. Actual backup data transfer is always
+# a direct client->server SSH connection running borg; nothing here ever
+# proxies backup bytes.
+my $b = under '/api/v1/backup' => sub ($c) {
+    my $email = _auth_and_authorize($c);
+    return 0 unless $email;
+    $c->stash(user_email => $email);
+    return 1;
+};
+
+$b->post('/enroll' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $result = $backup->enroll($json->{identifier}, $json->{hostname}, $json->{pubkey});
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
+$b->get('/enrollments' => sub ($c) {
+    my $result = $backup->list_pending_enrollments($c->param('action'));
+    return _set_json_response($c, $result, $result->{error} ? 500 : 200);
+});
+
+$b->post('/enrollments/:id/ack' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $result = $backup->ack_enrollment($c->stash('id'), $json->{repo});
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
+$b->post('/hosts/:identifier/revoke' => sub ($c) {
+    my $result = $backup->request_revoke($c->stash('identifier'));
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
+$b->post('/runs' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $result = $backup->report_run(%$json);
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
+$b->post('/checks' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $result = $backup->report_check(%$json);
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
+$b->get('/hosts' => sub ($c) {
+    my $result = $backup->list_hosts;
+    return _set_json_response($c, $result, $result->{error} ? 500 : 200);
+});
+
+$b->get('/repos' => sub ($c) {
+    my $result = $backup->list_repos($c->param('identifier'));
+    return _set_json_response($c, $result, $result->{error} ? 500 : 200);
+});
+
+$b->get('/hosts/:identifier/runs' => sub ($c) {
+    my $result = $backup->host_runs($c->stash('identifier'), $c->param('limit'));
+    return _set_json_response($c, $result, $result->{error} ? 500 : 200);
+});
+
+# Discovery: lets a never-before-enrolled client learn what server to talk
+# to. The server registers itself here during its own `setup` (see the
+# redesign plan) using its own `backup`-role account; clients read it
+# before ever submitting an /enroll request.
+$b->get('/server-info' => sub ($c) {
+    my $result = $backup->get_server_info;
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 404) : 200);
+});
+
+$b->post('/server-info' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $result = $backup->set_server_info($json->{hostname}, $json->{ssh_user}, $json->{backup_location});
+    return _set_json_response($c, $result, $result->{error} ? ($result->{missing_schema} ? 500 : 400) : 200);
+});
+
 # Admin routes — hardcoded to require the site_admin role, independent of
 # the dynamic api.role_permissions table (so a bad table edit can never
 # lock every admin out with no recovery path).
@@ -975,7 +1058,7 @@ my $a = under '/api/v1/admin' => sub ($c) {
 };
 
 $a->get('/roles' => sub ($c) {
-    my $result = $roles->list_roles;
+    my $result = $roles->list_roles_with_permissions;
     return _set_json_response($c, { success => 1, roles => $result }, 200);
 });
 
@@ -1007,6 +1090,26 @@ $a->delete('/roles/:role/permissions' => sub ($c) {
 
     my $result = $roles->revoke_endpoint($role, $endpoint);
     return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
+# Creates a dovecot.users account (idempotent) and assigns it an initial
+# role -- same "server generates the secret, returns it once, never accepts
+# a client-supplied password" posture as reset-password below. Whether the
+# caller may grant the requested role is enforced inside
+# Homelab::Roles::create_user (can_grant_role), not here -- site_admin can
+# always grant any role (hardcoded bypass), other granters are governed by
+# the api.role_grant_permissions table (migration 012).
+$a->post('/users' => sub ($c) {
+    my $json = $c->req->json // {};
+    return _set_json_response($c, { success => 0, error => 'email and role required' }, 400)
+        unless $json->{email} && $json->{role};
+
+    my $result = $roles->create_user($json->{email}, $json->{role}, $c->stash('user_email'),
+        quota_mb => $json->{quota_mb});
+    my $status = $result->{error}
+        ? ($result->{error} =~ /^Not authorized/ ? 403 : 400)
+        : ($result->{created} ? 201 : 200);
+    return _set_json_response($c, $result, $status);
 });
 
 $a->get('/users/#email/roles' => sub ($c) {

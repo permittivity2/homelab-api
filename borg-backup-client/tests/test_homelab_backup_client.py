@@ -1,14 +1,14 @@
-"""Unit tests for the pure-logic functions in bin/homelab-borg-service-backup-client.
+"""Unit tests for the pure-logic functions in bin/homelab-backup-client.
 
-No real borg/SSH/network calls -- the manual dry-run/build verification
-done alongside this tool's development already covers integration-level
-behavior (see README's Manual testing section).
+No real borg/SSH/network/homelab-cli calls -- the manual dry-run/build
+verification done alongside this tool's development already covers
+integration-level behavior (see README's Manual testing section).
 """
 import types
 
 import pytest
 
-import homelab_borg_service_backup_client as hb
+import homelab_backup_client as hb
 
 
 # --- _truthy ---------------------------------------------------------------
@@ -76,9 +76,9 @@ def test_local_only_mode_excludes_network_and_virtual_mounts(monkeypatch):
 def test_homelab_only_mode_combines_paths_and_dump_dirs():
     config = {"homelab_only": {"paths": ["/etc/homelab/api"]}}
     sources, _patterns = hb.build_sources_and_patterns(
-        config, "homelab_only", ["/var/lib/homelab-borg-service-backup-client/dumps"]
+        config, "homelab_only", ["/var/lib/homelab-backup-client/dumps"]
     )
-    assert sources == ["/etc/homelab/api", "/var/lib/homelab-borg-service-backup-client/dumps"]
+    assert sources == ["/etc/homelab/api", "/var/lib/homelab-backup-client/dumps"]
 
 
 def test_specific_mode_uses_specific_paths():
@@ -136,6 +136,71 @@ def test_build_repo_url_errors_without_server():
     assert exc_info.value.code == 1
 
 
+# --- resolve_backup_server ----------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_server_cache(monkeypatch):
+    """resolve_backup_server() memoizes a homelab-cli discovery result in
+    a module-level global for the lifetime of one process -- reset it
+    between tests so they don't leak into each other."""
+    monkeypatch.setattr(hb, "_DISCOVERED_SERVER_CACHE", None)
+
+
+def test_resolve_backup_server_prefers_explicit_cli_override():
+    config = {"backup_server": "config-server"}
+    args = types.SimpleNamespace(server="cli-server", ssh_user=None, location=None)
+    assert hb.resolve_backup_server(config, args) == ("borgbackup", "cli-server", "/var/borgbackup")
+
+
+def test_resolve_backup_server_falls_back_to_config():
+    config = {
+        "backup_server": "config-server",
+        "ssh_backup_server_username": "custom-user",
+        "backup_server_location": "/mnt/borgbackup",
+    }
+    assert hb.resolve_backup_server(config) == ("custom-user", "config-server", "/mnt/borgbackup")
+
+
+def test_resolve_backup_server_falls_back_to_homelab_cli_discovery(monkeypatch):
+    monkeypatch.setattr(
+        hb, "_discover_backup_server",
+        lambda config: ("discovered-user", "discovered-server", "/discovered/loc"),
+    )
+    config = {}
+    assert hb.resolve_backup_server(config) == ("discovered-user", "discovered-server", "/discovered/loc")
+
+
+def test_resolve_backup_server_caches_discovery_for_the_process(monkeypatch):
+    calls = []
+
+    def fake_discover(config):
+        calls.append(1)
+        return ("u", "s", "/l")
+
+    monkeypatch.setattr(hb, "_discover_backup_server", fake_discover)
+    config = {}
+    hb.resolve_backup_server(config)
+    hb.resolve_backup_server(config)
+    assert len(calls) == 1
+
+
+def test_resolve_backup_server_skips_discovery_when_disabled(monkeypatch):
+    called = []
+    monkeypatch.setattr(hb, "_discover_backup_server", lambda config: called.append(1))
+    config = {"homelab_cli": {"disabled": True}}
+    with pytest.raises(SystemExit) as exc_info:
+        hb.resolve_backup_server(config)
+    assert exc_info.value.code == 1
+    assert not called
+
+
+def test_resolve_backup_server_errors_when_nothing_resolves(monkeypatch):
+    monkeypatch.setattr(hb, "_discover_backup_server", lambda config: None)
+    with pytest.raises(SystemExit) as exc_info:
+        hb.resolve_backup_server({})
+    assert exc_info.value.code == 1
+
+
 # --- get_passphrase precedence ----------------------------------------------
 
 def _args(**kwargs):
@@ -177,7 +242,7 @@ def test_get_passphrase_errors_when_nothing_available_and_not_a_tty(monkeypatch)
     assert exc_info.value.code == 1
 
 
-# --- run_borg_capture_json (run-tracking database stats extraction) --------
+# --- run_borg_capture_json (run-history reporting stats extraction) --------
 
 def test_run_borg_capture_json_parses_stdout():
     cmd = ["python3", "-c", 'print(\'{"archive": {"name": "n", "stats": {"nfiles": 3}}}\')']
@@ -196,26 +261,45 @@ def test_run_borg_capture_json_raises_on_real_failure():
         hb.run_borg_capture_json(cmd, dict(hb.os.environ))
 
 
-# --- db_connect (disabled/driver-missing paths need no real Postgres) ------
+# --- _homelab_cli_disabled / _homelab_cli_config_dir ------------------------
 
-def test_db_connect_returns_none_when_disabled():
-    assert hb.db_connect({"database": {"enabled": False}}) is None
-    assert hb.db_connect({}) is None
-
-
-def test_db_connect_returns_none_when_psycopg2_missing(monkeypatch):
-    monkeypatch.setattr(hb, "_HAVE_PSYCOPG2", False)
-    assert hb.db_connect({"database": {"enabled": True, "host": "x"}}) is None
+def test_homelab_cli_disabled_defaults_false():
+    assert hb._homelab_cli_disabled({}) is False
+    assert hb._homelab_cli_disabled({"homelab_cli": {"disabled": "true"}}) is True
 
 
-# --- _db_safe never lets a database error propagate -------------------------
+def test_homelab_cli_config_dir_defaults():
+    assert hb._homelab_cli_config_dir({}) == hb.DEFAULT_HOMELAB_CLI_CONFIG_DIR
+    config = {"homelab_cli": {"config_dir": "/custom/dir"}}
+    assert hb._homelab_cli_config_dir(config) == "/custom/dir"
 
-def test_db_safe_catches_exceptions_and_returns_none():
+
+# --- _report_run_safe never lets a control-plane error propagate -----------
+
+def test_report_run_safe_catches_exceptions_and_returns_none():
     def boom():
-        raise RuntimeError("simulated database error")
+        raise RuntimeError("simulated homelab-cli error")
 
-    assert hb._db_safe(boom) is None
+    assert hb._report_run_safe(boom) is None
 
 
-def test_db_safe_returns_value_on_success():
-    assert hb._db_safe(lambda: 42) == 42
+def test_report_run_safe_returns_value_on_success():
+    assert hb._report_run_safe(lambda: 42) == 42
+
+
+def test_invoke_homelab_cli_is_a_noop_when_disabled(monkeypatch):
+    called = []
+    monkeypatch.setattr(hb.subprocess, "run", lambda *a, **k: called.append(1))
+    hb._invoke_homelab_cli({"homelab_cli": {"disabled": True}}, ["backup", "report-run"], "report-run")
+    assert not called
+
+
+def test_invoke_homelab_cli_raises_on_nonzero_exit(monkeypatch):
+    class FakeResult:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr(hb.subprocess, "run", lambda *a, **k: FakeResult())
+    with pytest.raises(RuntimeError):
+        hb._invoke_homelab_cli({}, ["backup", "report-run"], "report-run")

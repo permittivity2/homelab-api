@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Installs the homelab-borg-service-backup-client: dependencies, config
-# skeleton, SSH trust to borgbackup_server, script, and systemd units.
-# Must be run as root. Interactive.
+# Installs the homelab-backup-client: dependencies, config skeleton, SSH
+# keypair + control-plane enrollment, script, and systemd units. Must be
+# run as root. Interactive.
 #
 # Usage: install.sh [--passphrase-file FILE] [--skip-packages] [--skip-binary]
 #   --passphrase-file FILE   Use the passphrase in FILE instead of
@@ -10,21 +10,20 @@
 #                            overwritten).
 #   --skip-packages          Don't apt-install dependencies (used when a
 #                            Debian package already declared them).
-#   --skip-binary            Don't copy bin/homelab-borg-service-backup-client
-#                            into place (used when a Debian package
-#                            already put it in $PATH). Systemd units are
-#                            still generated/enabled either way.
+#   --skip-binary            Don't copy bin/homelab-backup-client into
+#                            place (used when a Debian package already
+#                            put it in $PATH). Systemd units are still
+#                            generated/enabled either way.
 #
 # This script runs in two contexts: a plain git checkout (REPO_ROOT is
 # this script's own parent directory: install/, config/, systemd/, bin/
 # as siblings) or a Debian package install, invoked as
-# `homelab-borg-service-backup-client setup` (REPO_ROOT is the package's
-# shared data directory, laid out identically). Detected automatically
-# below.
+# `homelab-backup-client setup` (REPO_ROOT is the package's shared data
+# directory, laid out identically). Detected automatically below.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PACKAGED_DATA_DIR=/usr/share/homelab-borg-service-backup-client
+PACKAGED_DATA_DIR=/usr/share/homelab-backup-client
 if [ -d "$SCRIPT_DIR/../config" ] && [ -d "$SCRIPT_DIR/../systemd" ]; then
     REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 else
@@ -32,17 +31,22 @@ else
 fi
 CONFIGEDIT="$REPO_ROOT/install/configedit.py"
 
-ETC_DIR=/etc/homelab/borgbackup
+ETC_DIR=/etc/homelab/backup/client
 CONFIG=$ETC_DIR/config.yml
 SSH_DIR=$ETC_DIR/ssh
 SSH_KEY=$SSH_DIR/id_ed25519
 KEY_ESCROW_DIR=$ETC_DIR/key-escrow
-if [ -x /usr/sbin/homelab-borg-service-backup-client ]; then
-    BIN_DEST=/usr/sbin/homelab-borg-service-backup-client   # already installed by the .deb
+HOMELAB_CLI_CONFIG_DIR=$ETC_DIR/homelab-cli
+if [ -x /usr/sbin/homelab-backup-client ]; then
+    BIN_DEST=/usr/sbin/homelab-backup-client   # already installed by the .deb
 else
-    BIN_DEST=/usr/local/sbin/homelab-borg-service-backup-client
+    BIN_DEST=/usr/local/sbin/homelab-backup-client
 fi
 UNIT_DIR=/etc/systemd/system
+
+# Old package's config dir, from before the homelab-borg-service-*
+# rename -- see migrate_legacy_config_dir() below.
+LEGACY_ETC_DIR=/etc/homelab/borgbackup
 
 # Set by prompt_config_values() when a new passphrase was generated this
 # run, so print_summary() can surface it once. Empty if config.yml
@@ -95,6 +99,9 @@ install_packages() {
         if ! command -v borg >/dev/null 2>&1; then
             die "borg command not available; --skip-packages assumes a Debian package already declared this dependency"
         fi
+        if ! command -v homelab-cli >/dev/null 2>&1; then
+            die "homelab-cli command not available; --skip-packages assumes a Debian package already declared this dependency"
+        fi
         return
     fi
 
@@ -104,7 +111,7 @@ install_packages() {
     dpkg -s python3-yaml >/dev/null 2>&1 || pkgs+=(python3-yaml)
     dpkg -s python3-systemd >/dev/null 2>&1 || pkgs+=(python3-systemd)
     dpkg -s openssh-client >/dev/null 2>&1 || pkgs+=(openssh-client)
-    dpkg -s postgresql-client >/dev/null 2>&1 || pkgs+=(postgresql-client)
+    dpkg -s homelab-cli >/dev/null 2>&1 || pkgs+=(homelab-cli)
 
     if [ "${#pkgs[@]}" -gt 0 ]; then
         log "installing: ${pkgs[*]} (this can take a minute on a fresh host)"
@@ -125,9 +132,33 @@ install_packages() {
     if ! command -v borg >/dev/null 2>&1; then
         die "borg command not available after install; is borgbackup available via apt on this host?"
     fi
+    if ! command -v homelab-cli >/dev/null 2>&1; then
+        die "homelab-cli command not available after install; is it available via apt on this host?"
+    fi
+}
+
+# Config-path migration for hosts still on the pre-rename
+# /etc/homelab/borgbackup layout (homelab-borg-service-backup-client).
+# Copies the old dir forward verbatim -- crucially preserving ssh/ (the
+# SSH keypair must never be regenerated, or the existing enrollment
+# would be orphaned) and key-escrow/ (the repo passphrase/key exports) --
+# and leaves the old copy in place as a rollback breadcrumb. A no-op if
+# the old package was never installed on this host, or if the new
+# config dir already exists (never overwrites).
+migrate_legacy_config_dir() {
+    if [ -d "$ETC_DIR" ]; then
+        return
+    fi
+    if [ ! -d "$LEGACY_ETC_DIR" ]; then
+        return
+    fi
+    log "found legacy config at $LEGACY_ETC_DIR, copying forward to $ETC_DIR (old copy left in place)"
+    mkdir -p "$(dirname "$ETC_DIR")"
+    cp -a "$LEGACY_ETC_DIR" "$ETC_DIR"
 }
 
 setup_config_skeleton() {
+    migrate_legacy_config_dir
     mkdir -p "$ETC_DIR"
     chmod 700 "$ETC_DIR"
     if [ ! -f "$CONFIG" ]; then
@@ -157,8 +188,11 @@ prompt_if_blank() {
 }
 
 prompt_config_values() {
-    prompt_if_blank borgbackup_server "Address of the centralized borgbackup_server" ""
-    [ -n "$(cfg_get borgbackup_server)" ] || die "borgbackup_server is required"
+    # backup_server is now optional -- auto-discovered via `homelab-cli
+    # backup server-info` if left blank (see setup_control_plane()) --
+    # so, unlike the old borgbackup_server, this is never a hard
+    # requirement here.
+    prompt_if_blank backup_server "Address of the centralized backup server (blank = auto-discover via homelab-api)" ""
 
     if [ -z "$(cfg_get encryption.passphrase)" ]; then
         local passphrase
@@ -228,321 +262,9 @@ prompt_config_values() {
         "") ;;
         *) warn "unrecognized choice, keeping current schedule" ;;
     esac
-
-    prompt_database_values
 }
 
-# Optional: record one row per backup/check run to PostgreSQL, for a
-# later homelab-api/homelab-cli phase to read back out (that read side
-# doesn't exist yet). Off by default. database.enabled is only ever set
-# to true once bootstrap_database() actually succeeds -- see below --
-# so this function's three states are: never attempted (fresh prompt),
-# succeeded (database.enabled true, no-op re-run), or attempted-but-not-
-# yet-successful (database.host set, enabled still false -- offer to
-# retry with the saved settings instead of silently doing nothing or
-# re-asking for everything from scratch).
-prompt_database_values() {
-    local current_enabled current_host
-    current_enabled=$(cfg_get database.enabled)
-    if [ "$current_enabled" = "true" ]; then
-        log "database.enabled already true, leaving database settings as-is"
-        return
-    fi
-
-    local db_host db_port db_name db_user db_password
-    current_host=$(cfg_get database.host)
-    if [ -n "$current_host" ]; then
-        warn "a previous database setup did not complete (saved host: $current_host)"
-        local resume_choice
-        read -r -p "Retry with saved settings [r], reconfigure from scratch [c], or skip for now [s]? [r/c/s]: " resume_choice
-        case "$resume_choice" in
-            c|C)
-                ;;  # fall through to the fresh prompts below
-            s|S)
-                log "skipping database setup"
-                return
-                ;;
-            *)
-                db_host=$current_host
-                db_port=$(cfg_get database.port); db_port=${db_port:-5432}
-                db_name=$(cfg_get database.dbname); db_name=${db_name:-homelab}
-                db_user=$(cfg_get database.user)
-                read -r -s -p "Database password (for $db_user@$db_host): " db_password; echo
-                install_psycopg2_if_needed
-                if retry_bootstrap_database "$db_host" "$db_port" "$db_name" "$db_user" "$db_password"; then
-                    cfg_set database.enabled true
-                fi
-                return
-                ;;
-        esac
-    fi
-
-    local use_db
-    read -r -p "Record backup run history to a PostgreSQL database, for future homelab-api/homelab-cli visibility? [y/N]: " use_db
-    case "$use_db" in
-        y|Y|yes|YES) ;;
-        *)
-            log "skipping database setup"
-            return
-            ;;
-    esac
-
-    local postgres_host pgbouncer_host db_role_name use_auto
-    read -r -p "Postgres host (for one-time role/schema setup) [localhost]: " postgres_host
-    postgres_host=${postgres_host:-localhost}
-    read -r -p "PgBouncer host (for ongoing runtime connections) [$postgres_host]: " pgbouncer_host
-    pgbouncer_host=${pgbouncer_host:-$postgres_host}
-    read -r -p "Database role name [$DB_ROLE_DEFAULT]: " db_role_name
-    db_role_name=${db_role_name:-$DB_ROLE_DEFAULT}
-
-    read -r -p "Attempt automatic role/schema setup via homelab-database? [Y/n]: " use_auto
-    case "$use_auto" in
-        n|N|no|NO)
-            ;;
-        *)
-            if attempt_automatic_database_setup "$postgres_host" "$pgbouncer_host" "$db_role_name"; then
-                return
-            fi
-            warn "automatic setup unavailable or failed; falling back to manual entry"
-            ;;
-    esac
-
-    read -r -p "Database host [$postgres_host]: " db_host
-    db_host=${db_host:-$postgres_host}
-    read -r -p "Database port [5432]: " db_port
-    db_port=${db_port:-5432}
-    read -r -p "Database name [homelab]: " db_name
-    db_name=${db_name:-homelab}
-    read -r -p "Database user [$db_role_name]: " db_user
-    db_user=${db_user:-$db_role_name}
-    read -r -s -p "Database password: " db_password; echo
-
-    # Saved as soon as entered (even before the connection is verified)
-    # so a failed/skipped attempt can be retried above without re-typing
-    # everything. database.enabled itself is only set on success below.
-    cfg_set database.host "$db_host"
-    cfg_set database.port "$db_port"
-    cfg_set database.dbname "$db_name"
-    cfg_set database.user "$db_user"
-    cfg_set database.password "$db_password"
-
-    install_psycopg2_if_needed
-
-    if retry_bootstrap_database "$db_host" "$db_port" "$db_name" "$db_user" "$db_password"; then
-        cfg_set database.enabled true
-    fi
-}
-
-DB_ROLE_DEFAULT=homelab-borg-service-backup-client
-DB_SCHEMA_NAME=service_backup
 SSH_PROBE_OPTS=(-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
-
-is_local_host() {
-    local host=$1
-    case "$host" in
-        localhost|127.0.0.1|::1) return 0 ;;
-    esac
-    [ "$host" = "$(hostname)" ] && return 0
-    [ "$host" = "$(hostname -f 2>/dev/null || true)" ] && return 0
-    return 1
-}
-
-# Runs homelab-database's bootstrap-app-role.sh, locally if it's
-# installed on this host, or over SSH on $postgres_host if that host has
-# it instead (the common case: this app host and the DB host are
-# different machines, and only the DB host runs homelab-database).
-# install/schema.sql is copied over first when running remotely, since
-# the script takes it as a local file path. Prints ROLE=/PASSWORD=/
-# SCRAM_SECRET= lines on success; returns non-zero if the script isn't
-# found in either place. If $postgres_host IS this host, never falls
-# through to SSH -- SSHing to itself just to re-check for a file that's
-# already confirmed missing locally can only fail the same way again (or
-# fail outright if this host has no key-based loopback SSH trust set up
-# at all, which is the common case and not something worth requiring).
-run_bootstrap_app_role() {
-    local postgres_host=$1 role=$2 schema=$3 schema_sql=$4
-    local script=/usr/share/homelab-database/scripts/bootstrap-app-role.sh
-
-    if [ -x "$script" ]; then
-        "$script" --role "$role" --schema "$schema" --schema-sql "$schema_sql" --db-host "$postgres_host"
-        return
-    fi
-    is_local_host "$postgres_host" && return 1
-
-    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" "test -x $script" 2>/dev/null || return 1
-
-    local remote_tmp
-    remote_tmp=$(ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" mktemp) || return 1
-    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" "cat > $remote_tmp" < "$schema_sql"
-    ssh "${SSH_PROBE_OPTS[@]}" "$postgres_host" \
-        "sudo $script --role '$role' --schema '$schema' --schema-sql $remote_tmp --db-host localhost; rc=\$?; rm -f $remote_tmp; exit \$rc"
-}
-
-# Same idea as run_bootstrap_app_role(), for homelab-pgbouncer's
-# bootstrap-pgbouncer-entry.sh -- no file argument here, so no need to
-# copy anything over first. Same is_local_host() short-circuit and same
-# reasoning: never SSH to this host to look for something already
-# confirmed absent locally.
-run_bootstrap_pgbouncer_entry() {
-    local pgbouncer_host=$1 role=$2 scram_secret=$3
-    local script=/usr/share/homelab-pgbouncer/scripts/bootstrap-pgbouncer-entry.sh
-
-    if [ -x "$script" ]; then
-        "$script" --role "$role" --scram-secret "$scram_secret" --pgbouncer-host "$pgbouncer_host"
-        return
-    fi
-    is_local_host "$pgbouncer_host" && return 1
-
-    ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" "test -x $script" 2>/dev/null || return 1
-    ssh "${SSH_PROBE_OPTS[@]}" "$pgbouncer_host" \
-        "sudo $script --role '$role' --scram-secret '$scram_secret' --pgbouncer-host localhost"
-}
-
-# Runs both bootstrap steps (Postgres role/schema, then pgbouncer
-# registration) and, on success, points config.yml's database.* at the
-# PGBOUNCER host/port -- the running service always connects through
-# the pooler, never straight to Postgres; direct access is only ever
-# used for this one-time setup. Returns non-zero (with nothing written)
-# if either homelab-database or homelab-pgbouncer isn't reachable,
-# letting the caller fall back to the manual flow unchanged.
-attempt_automatic_database_setup() {
-    local postgres_host=$1 pgbouncer_host=$2 role_name=$3
-    local pgbouncer_port=6432
-    local bootstrap_output role_out password_out secret_out
-
-    bootstrap_output=$(run_bootstrap_app_role "$postgres_host" "$role_name" "$DB_SCHEMA_NAME" "$REPO_ROOT/install/schema.sql") || return 1
-
-    role_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^ROLE=//p')
-    password_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^PASSWORD=//p')
-    secret_out=$(printf '%s\n' "$bootstrap_output" | sed -n 's/^SCRAM_SECRET=//p')
-    if [ -z "$role_out" ] || [ -z "$password_out" ] || [ -z "$secret_out" ]; then
-        warn "bootstrap-app-role.sh did not return the expected ROLE/PASSWORD/SCRAM_SECRET output"
-        return 1
-    fi
-    log "role '$role_out' bootstrapped on $postgres_host"
-
-    local register_choice
-    read -r -p "Register this role with homelab-pgbouncer on $pgbouncer_host? [Y/n]: " register_choice
-    case "$register_choice" in
-        n|N|no|NO)
-            warn "not registering with pgbouncer -- add '$role_out' to its userlist.txt by hand before use"
-            ;;
-        *)
-            if ! run_bootstrap_pgbouncer_entry "$pgbouncer_host" "$role_out" "$secret_out"; then
-                warn "pgbouncer registration unavailable/failed -- add '$role_out' to its userlist.txt by hand before use"
-            fi
-            ;;
-    esac
-
-    cfg_set database.host "$pgbouncer_host"
-    cfg_set database.port "$pgbouncer_port"
-    cfg_set database.dbname homelab
-    cfg_set database.user "$role_out"
-    cfg_set database.password "$password_out"
-
-    install_psycopg2_if_needed
-
-    # Not retry_bootstrap_database()/bootstrap_database(): those check for
-    # the database's existence (and createdb it if missing) via a
-    # connection to Postgres's own "postgres" maintenance database --
-    # correct for the manual flow's arbitrary, possibly-not-yet-created
-    # dbname, but wrong here. pgbouncer's [databases] stanza is a
-    # deliberately curated allowlist (by design -- it's the whole reason
-    # a pgbouncer-fronted role can't reach anything beyond what's been
-    # explicitly proxied) exposing only "homelab", not "postgres"; the
-    # dbname is always "homelab" here and its existence is already
-    # guaranteed by homelab-database, so all that's left to verify is
-    # that this role can actually reach it through the pooler.
-    if PGPASSWORD="$password_out" psql -X -h "$pgbouncer_host" -p "$pgbouncer_port" -U "$role_out" -d homelab -tAc "SELECT 1" >/dev/null 2>&1; then
-        cfg_set database.enabled true
-    else
-        warn "could not verify the connection to '$role_out'@$pgbouncer_host:$pgbouncer_port through pgbouncer"
-        warn "database.enabled left false -- check pgbouncer/network config and re-run setup to retry"
-    fi
-    return 0
-}
-
-install_psycopg2_if_needed() {
-    log "installing python3-psycopg2 (needed for run-tracking inserts)"
-    if ! dpkg -s python3-psycopg2 >/dev/null 2>&1; then
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get install -y python3-psycopg2
-    fi
-}
-
-# Retries bootstrap_database() until it succeeds or the admin chooses to
-# skip. No hard attempt limit -- fixing a typo'd hostname or a firewall
-# rule mid-flow shouldn't get cut off arbitrarily; 's'/'n' is the exit
-# hatch, and NOT enabling the database never blocks the rest of
-# `configure` (SSH trust, systemd units, etc. all still run).
-retry_bootstrap_database() {
-    local db_host=$1 db_port=$2 db_name=$3 db_user=$4 db_password=$5
-
-    while true; do
-        if bootstrap_database "$db_host" "$db_port" "$db_name" "$db_user" "$db_password"; then
-            return 0
-        fi
-
-        local retry_choice
-        # If stdin is exhausted/non-interactive, `read` fails (EOF) rather
-        # than blocking -- treat that as "skip", not "silently loop
-        # forever retrying with no way to provide new input".
-        if ! read -r -p "Retry database connection? [Y/n, or 's' to skip database setup]: " retry_choice; then
-            warn "no input available; skipping database setup"
-            return 1
-        fi
-        case "$retry_choice" in
-            n|N|s|S)
-                warn "skipping database setup; re-run 'homelab-borg-service-backup-client setup' later to retry"
-                return 1
-                ;;
-            *)
-                ;;  # loop and try again
-        esac
-    done
-}
-
-# Creates the database (if missing) and applies install/schema.sql.
-# Idempotent -- CREATE SCHEMA/TABLE IF NOT EXISTS throughout -- so safe
-# to re-run on every install.sh/configure invocation. Returns non-zero
-# on failure rather than calling die() -- a database problem must never
-# kill the rest of `configure` (see retry_bootstrap_database()).
-bootstrap_database() {
-    local db_host=$1 db_port=$2 db_name=$3 db_user=$4 db_password=$5
-
-    log "checking for database '$db_name' on $db_host:$db_port"
-    local exists
-    # -X: ignore any ~/.psqlrc for this (or any) user. A startup file
-    # that runs its own SET/other commands (e.g. a shared admin
-    # workstation's `SET search_path ...`) would otherwise print extra
-    # lines ahead of -tAc's actual output and corrupt this exists check.
-    if ! exists=$(PGPASSWORD="$db_password" psql -X -h "$db_host" -p "$db_port" -U "$db_user" -d postgres \
-            -tAc "SELECT 1 FROM pg_database WHERE datname='$db_name'" 2>&1); then
-        warn "could not connect to PostgreSQL at $db_host:$db_port as $db_user:"
-        warn "$exists"
-        return 1
-    fi
-
-    if [ "$exists" != "1" ]; then
-        log "creating database '$db_name'"
-        if ! PGPASSWORD="$db_password" createdb -h "$db_host" -p "$db_port" -U "$db_user" "$db_name"; then
-            warn "failed to create database '$db_name'"
-            return 1
-        fi
-    else
-        log "database '$db_name' already exists"
-    fi
-
-    log "applying schema to '$db_name'"
-    if ! PGPASSWORD="$db_password" psql -X -h "$db_host" -p "$db_port" -U "$db_user" -d "$db_name" \
-            -v ON_ERROR_STOP=1 -f "$REPO_ROOT/install/schema.sql"; then
-        warn "failed to apply install/schema.sql to '$db_name'"
-        return 1
-    fi
-
-    log "database ready: service_backup schema in '$db_name'"
-    return 0
-}
 
 # Every homelab-* package that wants homelab_only mode to protect it
 # ships /usr/share/homelab-<pkgname>/backup-paths.txt (one path per
@@ -589,14 +311,79 @@ populate_homelab_defaults() {
     cfg_set_list homelab_only.paths "${paths[@]}"
 }
 
-# Onboarding a client no longer involves the client SSHing into the
-# server at all -- the client only ever needs to know whether its own
-# dedicated key already works. Trust is established by whoever
-# administers the backup server running
-# `homelab-borg-service-backup-server enroll` there directly (see the
-# homelab-borg-service-backup-server package); this client never holds
-# or uses server-side admin/sudo credentials.
-setup_ssh_trust() {
+homelab_cli() {
+    "$(command -v homelab-cli)" --config "$HOMELAB_CLI_CONFIG_DIR" "$@"
+}
+
+# Ensures this host has its own working homelab-cli session, prompting
+# for api_url/email/password only if not already configured/validated.
+# The password (however obtained) is used exactly once to log in, then
+# immediately cleared from config.yml -- only session.json persists the
+# credential from then on.
+ensure_homelab_cli_session() {
+    mkdir -p "$HOMELAB_CLI_CONFIG_DIR"
+    chmod 700 "$HOMELAB_CLI_CONFIG_DIR"
+
+    prompt_if_blank homelab_cli.api_url "homelab-api base URL (e.g. https://api.example.internal)" ""
+    local api_url
+    api_url=$(cfg_get homelab_cli.api_url)
+    if [ -z "$api_url" ]; then
+        warn "homelab_cli.api_url is blank; skipping control-plane setup entirely"
+        return 1
+    fi
+    homelab_cli configure --set-api-url "$api_url" >/dev/null
+
+    if homelab_cli validate >/dev/null 2>&1; then
+        log "homelab-cli session already valid"
+        return 0
+    fi
+
+    prompt_if_blank homelab_cli.email "Control-plane account email" "homelabbackup@homelab.internal"
+    local email
+    email=$(cfg_get homelab_cli.email)
+    if [ -z "$email" ]; then
+        warn "homelab_cli.email is blank; skipping control-plane setup entirely"
+        return 1
+    fi
+
+    local password
+    password=$(cfg_get homelab_cli.password)
+    if [ -n "$password" ]; then
+        log "logging in to homelab-api as $email (using saved homelab_cli.password)"
+        if ! printf '%s\n' "$password" | homelab_cli login --email "$email" --password-stdin >/dev/null; then
+            warn "homelab-cli login failed; check homelab_cli.email/password and re-run setup"
+            return 1
+        fi
+    else
+        echo "Log in to homelab-api as $email (used once; only the resulting"
+        echo "session is kept -- no password is stored at rest):"
+        if ! homelab_cli login --email "$email" >/dev/null; then
+            warn "homelab-cli login failed; re-run setup to retry"
+            return 1
+        fi
+    fi
+
+    # Never leave a plaintext password sitting in config.yml once a
+    # session has been obtained.
+    cfg_set homelab_cli.password ""
+
+    if ! homelab_cli validate >/dev/null 2>&1; then
+        warn "homelab-cli session still not valid after login; skipping control-plane setup"
+        return 1
+    fi
+    return 0
+}
+
+# Onboarding a client no longer involves a human running a manual
+# `enroll` command on the backup server at all -- this submits the
+# host's pubkey to homelab-api once, then polls waiting for
+# homelab-backup-server's own periodic reconciliation job (not any
+# action here) to apply it to authorized_keys. Falls back cleanly (warn
+# and continue, retried on next `setup` run) if homelab_cli.disabled is
+# true or the control-plane session can't be established -- an admin
+# can always fall back to backup_server: hardcoded in config.yml and
+# skip this entirely.
+setup_control_plane() {
     mkdir -p "$SSH_DIR"
     chmod 700 "$SSH_DIR"
 
@@ -612,56 +399,69 @@ setup_ssh_trust() {
 
     if [ ! -f "$SSH_KEY" ]; then
         log "generating dedicated SSH key at $SSH_KEY"
-        ssh-keygen -t ed25519 -N "" -f "$SSH_KEY" -C "homelab-borg-service-backup-client-$identifier" >/dev/null
+        ssh-keygen -t ed25519 -N "" -f "$SSH_KEY" -C "homelab-backup-client-$identifier" >/dev/null
     fi
     chmod 600 "$SSH_KEY"
     chmod 644 "$SSH_KEY.pub"
 
-    local ssh_user server pubkey
-    ssh_user=$(cfg_get ssh_borgbackup_server_username); ssh_user=${ssh_user:-borgbackup}
-    server=$(cfg_get borgbackup_server)
-    pubkey=$(cat "$SSH_KEY.pub")
-
-    log "checking existing passwordless access to ${ssh_user}@${server}"
-    # A successful forced-command connection (borg serve) will still exit
-    # non-zero when fed garbage on stdin, so success is "no auth error" —
-    # not "exit code 0".
-    local probe
-    probe=$(echo | ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 \
-            -o StrictHostKeyChecking=accept-new "${ssh_user}@${server}" 2>&1) || true
-    if ! echo "$probe" | grep -qi "Permission denied"; then
-        log "passwordless access already works"
+    if [ "$(cfg_get homelab_cli.disabled)" = "true" ]; then
+        log "homelab_cli.disabled is true; skipping control-plane enrollment (set backup_server: manually)"
         return
     fi
 
-    warn "SSH trust to ${server} is not yet established"
+    if ! ensure_homelab_cli_session; then
+        warn "control-plane session unavailable; skipping enrollment for now"
+        warn "re-run 'homelab-backup-client setup' later to retry, or set backup_server: manually"
+        return
+    fi
+
+    log "submitting enrollment for $identifier"
+    if ! homelab_cli backup enroll --identifier "$identifier" --hostname "$(hostname)" --pubkey-file "$SSH_KEY.pub" >/dev/null; then
+        warn "enrollment submission failed; re-run 'homelab-backup-client setup' later to retry"
+        return
+    fi
+
+    local ssh_user server location
+    ssh_user=$(cfg_get ssh_backup_server_username); ssh_user=${ssh_user:-borgbackup}
+    server=$(cfg_get backup_server)
+    if [ -z "$server" ]; then
+        local server_info
+        server_info=$(homelab_cli backup server-info 2>/dev/null) || true
+        if [ -n "$server_info" ]; then
+            server=$(printf '%s' "$server_info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("hostname",""))' 2>/dev/null) || true
+        fi
+    fi
+    if [ -z "$server" ]; then
+        warn "could not determine backup server address to probe; the reconciliation job will still apply your enrollment -- check connectivity manually once a server is known"
+        return
+    fi
+
     echo
-    echo "  On ${server}, have an administrator run:"
-    echo "    sudo homelab-borg-service-backup-server enroll ${identifier} '${pubkey}'"
+    log "no admin action needed -- waiting for homelab-backup-server's own"
+    log "reconciliation job (runs on its own timer, typically every few"
+    log "minutes) to apply this enrollment to its authorized_keys"
     echo
 
-    local retry_choice
+    local retry_choice probe
     while true; do
-        if ! read -r -p "Press Enter to re-check once that's been run (or 's' to skip for now): " retry_choice; then
+        probe=$(echo | ssh -i "$SSH_KEY" "${SSH_PROBE_OPTS[@]}" "${ssh_user}@${server}" 2>&1) || true
+        if ! echo "$probe" | grep -qi "Permission denied"; then
+            log "passwordless access confirmed"
+            return
+        fi
+
+        if ! read -r -p "Still waiting on reconciliation; press Enter to re-check (or 's' to skip for now): " retry_choice; then
             warn "no input available; skipping SSH trust check for now"
             return
         fi
         case "$retry_choice" in
             s|S)
-                warn "skipping SSH trust check; re-run 'homelab-borg-service-backup-client setup' later to retry"
+                warn "skipping SSH trust check; re-run 'homelab-backup-client setup' later to retry"
                 return
                 ;;
             *)
                 ;;
         esac
-
-        probe=$(echo | ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 \
-                -o StrictHostKeyChecking=accept-new "${ssh_user}@${server}" 2>&1) || true
-        if ! echo "$probe" | grep -qi "Permission denied"; then
-            log "passwordless access confirmed"
-            return
-        fi
-        warn "still no passwordless access to ${server}"
     done
 }
 
@@ -670,7 +470,7 @@ install_script_and_units() {
         log "skipping binary install (--skip-binary): using $BIN_DEST"
     else
         log "installing $BIN_DEST"
-        install -o root -g root -m 700 "$REPO_ROOT/bin/homelab-borg-service-backup-client" "$BIN_DEST"
+        install -o root -g root -m 700 "$REPO_ROOT/bin/homelab-backup-client" "$BIN_DEST"
     fi
 
     local sched_mode
@@ -678,12 +478,12 @@ install_script_and_units() {
 
     if [ "$sched_mode" = "continuous" ]; then
         log "installing continuous service (no timer)"
-        systemctl disable --now homelab-borg-service-backup-client.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-borg-service-backup-client.timer"
+        systemctl disable --now homelab-backup-client.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-backup-client.timer"
         sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-borg-service-backup-client-continuous.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.service"
+            "$REPO_ROOT/systemd/homelab-backup-client-continuous.service.tmpl" > "$UNIT_DIR/homelab-backup-client.service"
         systemctl daemon-reload
-        systemctl enable --now homelab-borg-service-backup-client.service
+        systemctl enable --now homelab-backup-client.service
     else
         local on_calendar jitter_seconds
         jitter_seconds=$(cfg_get schedule.jitter_seconds); jitter_seconds=${jitter_seconds:-1800}
@@ -703,13 +503,13 @@ install_script_and_units() {
         esac
 
         log "installing oneshot service + timer (OnCalendar=$on_calendar, RandomizedDelaySec=$jitter_seconds)"
-        systemctl disable --now homelab-borg-service-backup-client.service >/dev/null 2>&1 || true
+        systemctl disable --now homelab-backup-client.service >/dev/null 2>&1 || true
         sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-borg-service-backup-client.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.service"
+            "$REPO_ROOT/systemd/homelab-backup-client.service.tmpl" > "$UNIT_DIR/homelab-backup-client.service"
         sed -e "s|__ON_CALENDAR__|$on_calendar|" -e "s|__JITTER_SECONDS__|$jitter_seconds|" \
-            "$REPO_ROOT/systemd/homelab-borg-service-backup-client.timer.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client.timer"
+            "$REPO_ROOT/systemd/homelab-backup-client.timer.tmpl" > "$UNIT_DIR/homelab-backup-client.timer"
         systemctl daemon-reload
-        systemctl enable --now homelab-borg-service-backup-client.timer
+        systemctl enable --now homelab-backup-client.timer
     fi
 
     install_check_unit
@@ -724,8 +524,8 @@ install_check_unit() {
 
     if [ "$check_mode" = "never" ]; then
         log "integrity_check.mode is never, removing any existing check timer"
-        systemctl disable --now homelab-borg-service-backup-client-check.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-borg-service-backup-client-check.service" "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
+        systemctl disable --now homelab-backup-client-check.timer >/dev/null 2>&1 || true
+        rm -f "$UNIT_DIR/homelab-backup-client-check.service" "$UNIT_DIR/homelab-backup-client-check.timer"
         systemctl daemon-reload
         return
     fi
@@ -737,16 +537,16 @@ install_check_unit() {
 
     log "installing integrity check oneshot service + timer (OnCalendar=$check_mode)"
     sed "s|__BIN_PATH__|$BIN_DEST|" \
-        "$REPO_ROOT/systemd/homelab-borg-service-backup-client-check.service.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client-check.service"
+        "$REPO_ROOT/systemd/homelab-backup-client-check.service.tmpl" > "$UNIT_DIR/homelab-backup-client-check.service"
     sed "s|__ON_CALENDAR__|$check_mode|" \
-        "$REPO_ROOT/systemd/homelab-borg-service-backup-client-check.timer.tmpl" > "$UNIT_DIR/homelab-borg-service-backup-client-check.timer"
+        "$REPO_ROOT/systemd/homelab-backup-client-check.timer.tmpl" > "$UNIT_DIR/homelab-backup-client-check.timer"
     systemctl daemon-reload
-    systemctl enable --now homelab-borg-service-backup-client-check.timer
+    systemctl enable --now homelab-backup-client-check.timer
 }
 
 # Picks (once, persisted) a random hour from schedule.window_hours and a
 # random minute, so a fleet of hosts on the same daily/weekly/monthly
-# schedule doesn't all hit borgbackup_server at exactly midnight. Prints
+# schedule doesn't all hit the backup server at exactly midnight. Prints
 # a systemd OnCalendar= expression for the given mode.
 build_randomized_calendar() {
     local mode=$1
@@ -787,10 +587,10 @@ print_summary() {
     log "script:      $BIN_DEST"
     log "mode:        $(cfg_get mode)"
     log "schedule:    $(cfg_get schedule.mode)"
-    log "database:    $([ "$(cfg_get database.enabled)" = "true" ] && echo "enabled ($(cfg_get database.dbname))" || echo "disabled")"
+    log "control plane: $([ "$(cfg_get homelab_cli.disabled)" = "true" ] && echo "disabled" || echo "$(cfg_get homelab_cli.api_url)")"
     echo
-    log "check status with: systemctl status homelab-borg-service-backup-client.service homelab-borg-service-backup-client.timer 2>/dev/null"
-    log "check logs with:   journalctl -t homelab-borg-service-backup-client -f"
+    log "check status with: systemctl status homelab-backup-client.service homelab-backup-client.timer 2>/dev/null"
+    log "check logs with:   journalctl -t homelab-backup-client -f"
     log "dry-run a manual test with: $BIN_DEST backup --dry-run --once"
 
     if [ -n "$GENERATED_PASSPHRASE" ]; then
@@ -805,7 +605,7 @@ print_summary() {
         echo "    $CONFIG"
         echo
         echo "  A key export will additionally appear under $KEY_ESCROW_DIR"
-        echo "  after the first backup run (see homelab-borg-service-backup-client backup --once)."
+        echo "  after the first backup run (see homelab-backup-client backup --once)."
         echo
         echo "  Copy the passphrase and the exported key files to a password"
         echo "  manager / secrets vault AND an offline/paper copy before this host"
@@ -819,7 +619,7 @@ main() {
     install_packages
     setup_config_skeleton
     prompt_config_values
-    setup_ssh_trust
+    setup_control_plane
     install_script_and_units
     print_summary
 }

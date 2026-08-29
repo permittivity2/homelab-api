@@ -1,3 +1,46 @@
+homelab-backup-client (1.0.0) unstable; urgency=medium
+
+  * BREAKING: renamed from homelab-borg-service-backup-client to
+    homelab-backup-client (binary, /etc/homelab/backup/client/ config
+    path, systemd units, bash completion, man page) -- part of a wider
+    redesign that replaces this package's identity/enrollment/bookkeeping
+    layer with homelab-api/homelab-cli integration, while leaving all
+    borg mechanics (the four backup modes, retention, restore, schedule
+    jitter, key escrow) untouched. Highlights:
+    - Enrollment is no longer a manual `enroll <id> <pubkey>` command run
+      by an administrator on the backup server. `setup` now submits this
+      host's pubkey via `homelab-cli backup enroll` once; a new
+      reconciliation job on homelab-backup-server applies it
+      automatically on its own timer. No SSH/sudo access to the backup
+      server is or ever was needed from this side.
+    - The optional run-history database feature no longer writes
+      directly to Postgres with its own credentials (all psycopg2 code,
+      database.* config, and install/schema.sql are gone). Each
+      backup/check run is now reported via `homelab-cli backup
+      report-run`/`report-check`, going through the same homelab-api
+      identity layer every other homelab-* package uses. Still
+      best-effort: a control-plane hiccup only logs a warning, never
+      fails or blocks an actual backup.
+    - backup_server/ssh_backup_server_username/backup_server_location
+      (renamed from borgbackup_server/etc.) are now all optional --
+      left blank, they're auto-discovered via `homelab-cli backup
+      server-info`. Set backup_server explicitly to keep working through
+      a homelab-api outage, or set homelab_cli.disabled: true to opt this
+      host out of the control plane entirely.
+    - New Depends: homelab-cli. Dropped Depends: postgresql-client,
+      Recommends: python3-psycopg2 -- this package never touches
+      Postgres directly, in any form, anymore.
+    - A host still configured under the old
+      /etc/homelab/borgbackup/ path is migrated forward automatically
+      (config, SSH keypair, key-escrow -- never regenerated) the first
+      time `setup`/install.sh runs on this version; the old copy is left
+      in place, not deleted.
+    - Reframed as a general homelab-recovery backup tool rather than
+      narrowly disaster recovery for /etc/homelab/* -- nothing about the
+      four backup modes themselves changed, just the README's framing.
+
+ -- Gardner <gardner@homelab>  Sat, 29 Aug 2026 12:00:00 -0500
+
 homelab-borg-service-backup-client (0.3.0) unstable; urgency=medium
 
   * homelab_only mode no longer hardcodes per-package detection (which
