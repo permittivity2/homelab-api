@@ -1,3 +1,28 @@
+homelab-cli (0.2.6) unstable; urgency=medium
+
+  * Add a `--config DIR` global flag (also $HOMELAB_CLI_CONFIG_DIR) to
+    override the default ~/.config/homelab-cli/ session/config directory
+    -- needed for service accounts (homelab-backup-client/-server) so
+    their sessions never collide with a human's.
+  * `login` supports non-interactive use via --password, --password-stdin,
+    or --password-env VAR (requires --email alongside any of them --
+    otherwise falls back to the existing interactive prompts).
+  * New `backup` command group: enroll, list-pending-enrollments,
+    ack-enrollment, revoke-host, report-run, report-check, list-hosts,
+    list-repos, host-runs, server-info, set-server-info -- the control-
+    plane surface for homelab-backup-client/-server's redesigned
+    enrollment/bookkeeping flow.
+  * New `admin create-user` (idempotent account creation, prints a
+    server-generated password once) and `admin list-users` (every
+    account's roles + active flag).
+  * Tab completion is now generated from this script's own argparse tree
+    via argcomplete instead of a hand-maintained bash file (which had
+    already drifted out of sync more than once) -- also picks up
+    flag-prefix and choices= completion for free. New Depends:
+    python3-argcomplete, bash-completion.
+
+ -- Gardner <gardner@homelab>  Sat, 29 Aug 2026 14:59:25 -0500
+
 homelab-cli (0.2.5) unstable; urgency=medium
 
   * Fix bash completion: --attach-file, --attach-drive, --cc, --bcc,
