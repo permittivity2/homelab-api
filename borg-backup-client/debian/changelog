@@ -1,3 +1,30 @@
+homelab-backup-client (0.4.1) unstable; urgency=medium
+
+  * Fix: re-running `setup`/`configure` unconditionally rewrote and
+    re-enabled the backup and integrity-check systemd timers even when
+    nothing about the schedule actually changed. Both timers are
+    Persistent=true, so any restart/re-enable can make systemd fire an
+    immediate unscheduled "catch-up" run -- observed in practice as a
+    backup landing seconds after an otherwise no-op `setup` re-run, with
+    a spurious "config file not found" in its log even though the config
+    file was present the whole time. Two fixes:
+    - install.sh now writes generated unit files atomically (temp file +
+      rename) and diffs the generated content against what's already
+      installed, only touching systemd (disable/rewrite/daemon-reload/
+      enable) when something genuinely changed. A same-answers re-run of
+      `setup` now leaves the timers' last-trigger/next-elapse state and
+      unit files completely untouched. When a real schedule change does
+      require a reinstall, a new log line names the Persistent=true
+      timer and notes that a one-off catch-up run may follow.
+    - load_config() no longer uses os.path.exists() to decide "not
+      found" -- that call swallows any OSError (including a transient
+      permission/IO error) into a bare False, so a real read failure and
+      a genuinely-missing file produced an identical, misleading "config
+      file not found" message. Now distinguishes FileNotFoundError from
+      other OSErrors with separate log messages.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 09:45:00 -0500
+
 homelab-backup-client (0.4.0) unstable; urgency=medium
 
   * BREAKING: renamed from homelab-borg-service-backup-client to

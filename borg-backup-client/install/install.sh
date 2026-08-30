@@ -496,6 +496,40 @@ setup_control_plane() {
     done
 }
 
+# Writes stdin's content to $1 atomically (temp file in the same
+# directory, then `mv -f` -- a same-filesystem rename, so systemd or a
+# just-fired unit can never observe a half-written unit file mid-sed).
+# Returns 0 (changed) if the content differs from what's already there
+# (or the file didn't exist yet), 1 (unchanged) if it's byte-identical --
+# callers use this to skip re-triggering systemd entirely when a setup
+# re-run didn't actually change anything, see install_script_and_units().
+install_unit_file() {
+    local dest=$1 tmp
+    tmp=$(mktemp "${dest}.XXXXXX") || die "could not create temp file for $dest"
+    cat > "$tmp" || { rm -f "$tmp"; die "could not write $dest"; }
+    if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    chmod 644 "$tmp" || { rm -f "$tmp"; die "could not chmod $tmp"; }
+    mv -f "$tmp" "$dest" || die "could not install $dest"
+    return 0
+}
+
+# Every generated timer here has Persistent=true (a missed run should
+# fire on next boot/reload rather than being silently skipped), which
+# means restarting/re-enabling the timer for any reason -- even a no-op
+# `setup` re-run -- can make systemd immediately fire an unscheduled
+# "catch-up" run. install_script_and_units()/install_check_unit() below
+# only pay that cost when a unit's content actually changed; when one
+# does, log this note so a future "why did a backup run right now" isn't
+# a fresh investigation every time.
+warn_persistent_catchup() {
+    log "note: $1 is Persistent=true -- since its schedule changed, systemd" \
+        "may run it once immediately (a one-off catch-up) before settling" \
+        "back into its normal interval"
+}
+
 install_script_and_units() {
     if [ "$SKIP_BINARY" -eq 1 ]; then
         log "skipping binary install (--skip-binary): using $BIN_DEST"
@@ -508,13 +542,23 @@ install_script_and_units() {
     sched_mode=$(cfg_get schedule.mode); sched_mode=${sched_mode:-daily}
 
     if [ "$sched_mode" = "continuous" ]; then
-        log "installing continuous service (no timer)"
-        systemctl disable --now homelab-backup-client.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-backup-client.timer"
-        sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-backup-client-continuous.service.tmpl" > "$UNIT_DIR/homelab-backup-client.service"
-        systemctl daemon-reload
-        systemctl enable --now homelab-backup-client.service
+        local changed=0
+        if install_unit_file "$UNIT_DIR/homelab-backup-client.service" \
+            < <(sed "s|__BIN_PATH__|$BIN_DEST|" "$REPO_ROOT/systemd/homelab-backup-client-continuous.service.tmpl"); then
+            changed=1
+        fi
+        if [ -f "$UNIT_DIR/homelab-backup-client.timer" ]; then
+            changed=1  # switching away from a timer-based schedule
+        fi
+        if [ "$changed" -eq 1 ]; then
+            log "installing continuous service (no timer)"
+            systemctl disable --now homelab-backup-client.timer >/dev/null 2>&1 || true
+            rm -f "$UNIT_DIR/homelab-backup-client.timer"
+            systemctl daemon-reload
+            systemctl enable --now homelab-backup-client.service
+        else
+            log "continuous service unit unchanged, leaving systemd state as-is"
+        fi
     else
         local on_calendar jitter_seconds
         jitter_seconds=$(cfg_get schedule.jitter_seconds); jitter_seconds=${jitter_seconds:-1800}
@@ -533,14 +577,28 @@ install_script_and_units() {
             *) die "unknown schedule.mode: $sched_mode" ;;
         esac
 
-        log "installing oneshot service + timer (OnCalendar=$on_calendar, RandomizedDelaySec=$jitter_seconds)"
-        systemctl disable --now homelab-backup-client.service >/dev/null 2>&1 || true
-        sed "s|__BIN_PATH__|$BIN_DEST|" \
-            "$REPO_ROOT/systemd/homelab-backup-client.service.tmpl" > "$UNIT_DIR/homelab-backup-client.service"
-        sed -e "s|__ON_CALENDAR__|$on_calendar|" -e "s|__JITTER_SECONDS__|$jitter_seconds|" \
-            "$REPO_ROOT/systemd/homelab-backup-client.timer.tmpl" > "$UNIT_DIR/homelab-backup-client.timer"
-        systemctl daemon-reload
-        systemctl enable --now homelab-backup-client.timer
+        local service_changed=0 timer_changed=0
+        if install_unit_file "$UNIT_DIR/homelab-backup-client.service" \
+            < <(sed "s|__BIN_PATH__|$BIN_DEST|" "$REPO_ROOT/systemd/homelab-backup-client.service.tmpl"); then
+            service_changed=1
+        fi
+        if install_unit_file "$UNIT_DIR/homelab-backup-client.timer" \
+            < <(sed -e "s|__ON_CALENDAR__|$on_calendar|" -e "s|__JITTER_SECONDS__|$jitter_seconds|" \
+                "$REPO_ROOT/systemd/homelab-backup-client.timer.tmpl"); then
+            timer_changed=1
+        fi
+
+        if [ "$service_changed" -eq 1 ] || [ "$timer_changed" -eq 1 ]; then
+            log "installing oneshot service + timer (OnCalendar=$on_calendar, RandomizedDelaySec=$jitter_seconds)"
+            systemctl disable --now homelab-backup-client.service >/dev/null 2>&1 || true
+            systemctl daemon-reload
+            systemctl enable --now homelab-backup-client.timer
+            if [ "$timer_changed" -eq 1 ]; then
+                warn_persistent_catchup "homelab-backup-client.timer"
+            fi
+        else
+            log "oneshot service + timer unchanged (OnCalendar=$on_calendar), leaving systemd state as-is"
+        fi
     fi
 
     install_check_unit
@@ -554,10 +612,12 @@ install_check_unit() {
     check_mode=$(cfg_get integrity_check.mode); check_mode=${check_mode:-monthly}
 
     if [ "$check_mode" = "never" ]; then
-        log "integrity_check.mode is never, removing any existing check timer"
-        systemctl disable --now homelab-backup-client-check.timer >/dev/null 2>&1 || true
-        rm -f "$UNIT_DIR/homelab-backup-client-check.service" "$UNIT_DIR/homelab-backup-client-check.timer"
-        systemctl daemon-reload
+        if [ -f "$UNIT_DIR/homelab-backup-client-check.timer" ]; then
+            log "integrity_check.mode is never, removing any existing check timer"
+            systemctl disable --now homelab-backup-client-check.timer >/dev/null 2>&1 || true
+            rm -f "$UNIT_DIR/homelab-backup-client-check.service" "$UNIT_DIR/homelab-backup-client-check.timer"
+            systemctl daemon-reload
+        fi
         return
     fi
 
@@ -566,13 +626,26 @@ install_check_unit() {
         check_mode="monthly"
     fi
 
-    log "installing integrity check oneshot service + timer (OnCalendar=$check_mode)"
-    sed "s|__BIN_PATH__|$BIN_DEST|" \
-        "$REPO_ROOT/systemd/homelab-backup-client-check.service.tmpl" > "$UNIT_DIR/homelab-backup-client-check.service"
-    sed "s|__ON_CALENDAR__|$check_mode|" \
-        "$REPO_ROOT/systemd/homelab-backup-client-check.timer.tmpl" > "$UNIT_DIR/homelab-backup-client-check.timer"
-    systemctl daemon-reload
-    systemctl enable --now homelab-backup-client-check.timer
+    local service_changed=0 timer_changed=0
+    if install_unit_file "$UNIT_DIR/homelab-backup-client-check.service" \
+        < <(sed "s|__BIN_PATH__|$BIN_DEST|" "$REPO_ROOT/systemd/homelab-backup-client-check.service.tmpl"); then
+        service_changed=1
+    fi
+    if install_unit_file "$UNIT_DIR/homelab-backup-client-check.timer" \
+        < <(sed "s|__ON_CALENDAR__|$check_mode|" "$REPO_ROOT/systemd/homelab-backup-client-check.timer.tmpl"); then
+        timer_changed=1
+    fi
+
+    if [ "$service_changed" -eq 1 ] || [ "$timer_changed" -eq 1 ]; then
+        log "installing integrity check oneshot service + timer (OnCalendar=$check_mode)"
+        systemctl daemon-reload
+        systemctl enable --now homelab-backup-client-check.timer
+        if [ "$timer_changed" -eq 1 ]; then
+            warn_persistent_catchup "homelab-backup-client-check.timer"
+        fi
+    else
+        log "integrity check service + timer unchanged (OnCalendar=$check_mode), leaving systemd state as-is"
+    fi
 }
 
 # Picks (once, persisted) a random hour from schedule.window_hours and a

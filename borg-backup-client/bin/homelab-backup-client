@@ -123,14 +123,26 @@ def heartbeat(label):
 
 
 def load_config(path, required=True):
-    if not os.path.exists(path):
+    # Opens directly rather than checking os.path.exists() first: that
+    # check swallows any OSError (including a transient permission/IO
+    # error on the path or one of its parent directories) into a bare
+    # False, which then got reported as "not found" even when the file
+    # was actually present -- indistinguishable from a genuine ENOENT and
+    # much harder to diagnose after the fact.
+    try:
+        with open(path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        return data
+    except FileNotFoundError:
         if required:
             log.error("config file not found: %s", path)
             sys.exit(1)
         return {}
-    with open(path, "r") as f:
-        data = yaml.safe_load(f) or {}
-    return data
+    except OSError as e:
+        if required:
+            log.error("config file %s could not be read: %s", path, e)
+            sys.exit(1)
+        return {}
 
 
 def resolve_identifier(config):
