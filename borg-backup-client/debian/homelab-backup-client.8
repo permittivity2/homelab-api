@@ -70,13 +70,23 @@ timer invokes, on the schedule set by
 in config.yml (default
 .BR monthly ).
 .TP
-.BI "list-archives " "[--host ID] [--server S] [--ssh-user U] [--location DIR] [--ssh-key PATH] [--passphrase-file PATH]"
-List archives in a repo. All options default to the local config.yml
-(with the backup server itself auto-discovered via homelab-cli if
+.BI "list-archives " "[--host ID] [--server S] [--ssh-user U] [--location DIR] [--ssh-key PATH] [--passphrase-file PATH] [--archive NAME] [--names-only]"
+List archives in a repo, or (with
+.BR --archive )
+one specific archive's file contents instead. All override options
+default to the local config.yml (with the backup server itself
+auto-discovered via homelab-cli if
 .B backup_server
 is blank); override them to inspect a different host's repo, e.g.
 during disaster recovery with the admin recovery key (see
 .B setup-admin-recovery-key.sh ).
+.B --names-only
+prints just archive names, one per line, no other detail \- for
+scripting, and what shell completion uses to offer real archive names
+after
+.B --archive
+on both this command and
+.BR restore .
 .TP
 .BI "restore --archive NAME --target DIR " "[--paths ...] [--dry-run] [same overrides as list-archives]"
 Extract an archive into

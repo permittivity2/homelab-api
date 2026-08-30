@@ -201,6 +201,21 @@ omitted, so restoring a specific file on a still-alive host (no disaster
 involved) just needs `homelab-backup-client list-archives` / `restore
 --archive ... --target ...` with no overrides.
 
+To find which archive has the file/directory you need before extracting
+anything, pass `--archive NAME` to `list-archives` to list that
+archive's contents instead of the repo's archive names:
+```
+homelab-backup-client list-archives                          # archive names
+homelab-backup-client list-archives --archive <archive-name>  # that archive's files
+```
+Tab completion offers real archive names after `--archive` on both
+`list-archives` and `restore` (it shells out to `list-archives
+--names-only` under the hood, reusing whatever `--host`/`--server`/etc.
+overrides are already on the command line) — falls back to no
+suggestions if the repo can't be reached quickly, nothing has been
+enrolled/backed up yet, or passwordless sudo isn't set up for this
+command.
+
 ## Run-history reporting (optional, via homelab-cli)
 
 Unless `homelab_cli.disabled: true` is set, every `backup`/`check` run
@@ -267,6 +282,7 @@ homelab-backup-client check [--config PATH]
 homelab-backup-client list-archives [--host ID] [--server S] [--ssh-user U]
                                      [--location DIR] [--ssh-key PATH]
                                      [--passphrase-file PATH]
+                                     [--archive NAME] [--names-only]
 homelab-backup-client restore --archive NAME --target DIR [--paths ...]
                                [--dry-run] [same overrides as list-archives]
 homelab-backup-client setup [--passphrase-file PATH]

@@ -1,3 +1,35 @@
+homelab-backup-client (0.4.3) unstable; urgency=medium
+
+  * `list-archives --archive NAME` now lists that one archive's file
+    contents (`borg list <repo>::<archive>`) instead of requiring
+    `restore --dry-run` with a throwaway `--target` just to browse an
+    archive. `--names-only` prints bare archive names, one per line, for
+    scripting -- and is what bash completion now uses: `--archive <Tab>`
+    on both `list-archives` and `restore` offers real archive names,
+    reusing whatever --host/--server/--ssh-user/--location/--ssh-key/
+    --passphrase-file overrides are already on the command line (so a
+    disaster-recovery restore against another host's repo completes
+    against that repo, not this host's own). Runs via `sudo -n` (the
+    config/SSH key are root-owned; a completion callback itself always
+    runs unprivileged) and with stdin redirected from /dev/null (so an
+    unresolvable passphrase fails fast instead of silently blocking on
+    an interactive prompt during a Tab press); any failure at all --
+    unreachable server, no passwordless sudo, nothing backed up yet --
+    just yields no completions, same as e.g. kubectl's dynamic
+    completion.
+  * Fix: `ssh` had no connect timeout of its own, so an unreachable or
+    misconfigured backup server address left it blocked in a raw TCP
+    connect() indefinitely -- caught live via the completion work above,
+    where it left orphaned `borg`/`ssh` processes running forever
+    against a bad address (`sudo` starts a new session for the command
+    it execs, which took them out of the process group an external
+    `timeout` was trying to signal). `BORG_RSH` now always sets
+    `-o ConnectTimeout=5`, matching the timeout this package's own SSH
+    trust probe already uses elsewhere. This bounds every borg operation
+    against an unreachable server, not just the new completion path.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 10:35:00 -0500
+
 homelab-backup-client (0.4.2) unstable; urgency=medium
 
   * A Ctrl-C during `list-archives`/`restore`/`backup` (most commonly

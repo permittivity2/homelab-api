@@ -420,11 +420,24 @@ def build_env(passphrase, ssh_key_path):
     env = dict(os.environ)
     if passphrase:
         env["BORG_PASSPHRASE"] = passphrase
+    # ConnectTimeout bounds the TCP handshake only -- without it, an
+    # unreachable/wrong backup server address leaves ssh blocked in
+    # connect() with no timeout of its own, which can run for minutes
+    # (OS-level TCP retransmit limits) regardless of any timeout/signal
+    # wrapper around this process: caught live via shell-completion
+    # calls that left orphaned `borg`/`ssh` processes running forever
+    # against an unreachable address after `sudo` (which starts its own
+    # session for the child it execs) took the rest of the process tree
+    # out of the process group an external `timeout` was signaling.
+    ssh_opts = "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=5"
     if ssh_key_path:
         if os.path.exists(ssh_key_path):
-            env["BORG_RSH"] = f"ssh -i {ssh_key_path} -o StrictHostKeyChecking=accept-new"
+            env["BORG_RSH"] = f"ssh -i {ssh_key_path} {ssh_opts}"
         else:
             log.warning("SSH key %s not found; falling back to default ssh identity", ssh_key_path)
+            env["BORG_RSH"] = f"ssh {ssh_opts}"
+    else:
+        env["BORG_RSH"] = f"ssh {ssh_opts}"
     return env
 
 
@@ -801,8 +814,17 @@ def cmd_configure(args):
 
 
 def cmd_list_archives(args, config):
+    if args.archive and args.names_only:
+        log.error("--names-only lists archive names; it doesn't apply together with --archive")
+        sys.exit(1)
     _identifier, repo, env = resolve_repo_and_env(config, args)
-    ok = run_borg_interactive([BORG_CMD, "list", repo], env)
+    if args.archive:
+        cmd = [BORG_CMD, "list", f"{repo}::{args.archive}"]
+    else:
+        cmd = [BORG_CMD, "list", repo]
+        if args.names_only:
+            cmd.append("--short")
+    ok = run_borg_interactive(cmd, env)
     sys.exit(0 if ok else 1)
 
 
@@ -856,8 +878,18 @@ def build_parser():
 
     sub.add_parser("check", parents=[common], help="Verify this host's repo integrity (borg check)")
 
-    p_list = sub.add_parser("list-archives", parents=[common], help="List archives in a repo")
+    p_list = sub.add_parser("list-archives", parents=[common], help="List archives in a repo, or one archive's contents")
     add_repo_override_args(p_list)
+    p_list.add_argument(
+        "--archive",
+        help="List this archive's file contents instead of the repo's archive names",
+    )
+    p_list.add_argument(
+        "--names-only", action="store_true",
+        help="Print just archive names, one per line, no other detail "
+             "(ignored/invalid together with --archive; mainly for scripting "
+             "and shell completion)",
+    )
 
     p_restore = sub.add_parser("restore", parents=[common], help="Extract an archive into a target directory")
     add_repo_override_args(p_restore)
