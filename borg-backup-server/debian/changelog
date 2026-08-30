@@ -1,3 +1,23 @@
+homelab-backup-server (0.4.1) unstable; urgency=medium
+
+  * Fix: `setup` crashed with "config.yml: key not found and parent path
+    missing: homelab_cli.email" on any host whose config.yml was
+    migrated forward from the pre-redesign package -- that old config
+    never had a homelab_cli:/reconcile: block at all, and the config
+    editor could only insert a key under an EXISTING parent section, not
+    create a missing one. Caught live on a real host. It now appends a
+    brand-new top-level section when needed instead of failing outright.
+  * Reworded the interactive `setup` flow away from "control-plane
+    account"/"control-plane session" jargon toward plain language
+    ("logged in to homelab-api as X", "this server's homelab-api login
+    email") -- also drops a stale reference to an internal planning
+    document's rollout step from one error message. `setup` now also
+    prints a short explanation up front: this account doesn't need to
+    exist ahead of time, and if it's missing you'll be asked once for an
+    ADMIN homelab-api account to create it, never again after that.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 11:15:00 -0500
+
 homelab-backup-server (0.4.0) unstable; urgency=medium
 
   * BREAKING: renamed from homelab-borg-service-backup-server to

@@ -186,7 +186,22 @@ def _cfg_find_insertion_point(lines, path):
         return len(lines), 0
     parent_i, parent_indent = _cfg_find_line(lines, parent_path)
     if parent_i is None:
-        return None, None
+        if len(parent_path) > 1:
+            # This editor only understands one level of nesting -- a
+            # missing grandparent means the file isn't shaped the way
+            # this tool expects at all, not something to paper over.
+            return None, None
+        # The top-level section itself doesn't exist yet -- e.g. a
+        # host migrated forward from the pre-redesign package, whose
+        # config.yml predates homelab_cli:/reconcile: entirely. Append
+        # a brand-new section rather than failing outright: this used
+        # to crash `setup` with "key not found and parent path missing"
+        # on every such host, since there was no way to create a
+        # missing parent, only insert under an existing one.
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.append(f"{parent_path[0]}:\n")
+        return len(lines), 2
     item_indent = parent_indent + 2
     j = parent_i + 1
     while j < len(lines):
@@ -398,10 +413,10 @@ def cmd_reconcile(args):
 
     validate = _run_cli(cli_dir, "validate")
     if validate.returncode != 0:
-        # A control-plane outage must never trip systemd's failure-count
+        # A homelab-api outage must never trip systemd's failure-count
         # limits into disabling the timer, and authorized_keys must not
         # be touched at all in this case -- exit 0, not 1.
-        _log_warning(f"control-plane session invalid, skipping this run: {_proc_error_text(validate)}")
+        _log_warning(f"not logged in to homelab-api, skipping this run: {_proc_error_text(validate)}")
         return 0
 
     pending_proc = _run_cli(cli_dir, "backup", "list-pending-enrollments")
@@ -500,7 +515,8 @@ def _discover_server_hostname(cli_dir):
 
 
 # ---------------------------------------------------------------------------
-# setup -- interactive control-plane connection + reconcile timer install.
+# setup -- interactively logs this server in to homelab-api (creating its
+# account first if needed) and installs the reconcile timer.
 # ---------------------------------------------------------------------------
 
 def _prompt(message, default=None):
@@ -510,13 +526,13 @@ def _prompt(message, default=None):
 
 
 def _create_user_via_admin_session(email, args, role="backup"):
-    """Creates/verifies the control-plane service account. Tries the
+    """Creates/verifies this server's own homelab-api account. Tries the
     invoking operator's own personal homelab-cli session first (no
     --config override); falls back to a throwaway temp --config dir the
     operator logs into with their own admin credentials, which is
     discarded (TemporaryDirectory context exit) once done. Returns the
     parsed JSON response from `admin create-user`, or None on failure."""
-    print(f"Creating/verifying control-plane account '{email}' (role={role})...")
+    print(f"Creating/verifying the '{email}' homelab-api account (role={role})...")
 
     result = subprocess.run(
         ["homelab-cli", "admin", "create-user", email, "--role", role],
@@ -596,7 +612,7 @@ def _resolve_service_password(create_resp, args):
               file=sys.stderr)
 
     print(
-        f"warning: control-plane account already existed and no password was supplied "
+        f"warning: this homelab-api account already existed and no password was supplied "
         f"(--password-file/--password-env); generating a new one via openssl, which will "
         f"only work if it happens to match the account's real password. If login below "
         f"fails, rotate the account's password first (homelab-cli admin reset-password) "
@@ -656,7 +672,7 @@ def cmd_setup(args):
     cfg_set_scalar(("homelab_api_url",), api_url)
 
     email = args.account_email or cfg["homelab_cli"]["email"] or DEFAULT_ACCOUNT_EMAIL
-    email = _prompt("Control-plane account email for this server", email)
+    email = _prompt("homelab-api login email for this server", email)
     cfg_set_scalar(("homelab_cli", "email"), email)
 
     cli_dir = cfg["homelab_cli"]["config_dir"] or DEFAULT_HOMELAB_CLI_CONFIG_DIR
@@ -669,14 +685,19 @@ def cmd_setup(args):
 
     validate = _run_cli(cli_dir, "validate")
     if validate.returncode == 0:
-        print(f"Existing control-plane session for '{email}' is already valid, nothing to bootstrap.")
+        print(f"Already logged in to homelab-api as '{email}' -- nothing more to do here.")
     else:
-        print("Control-plane session is not valid yet; bootstrapping the service account...")
+        print(f"Not logged in to homelab-api as '{email}' yet.")
+        print("This account doesn't need to exist ahead of time: if it's missing, you'll")
+        print("be asked once for an ADMIN homelab-api account (one allowed to create new")
+        print("accounts) to create it. After that, this server keeps its own login and")
+        print("you won't be asked for admin credentials again.")
         create_resp = _create_user_via_admin_session(email, args)
         if create_resp is None:
-            sys.exit("error: could not create/verify the control-plane account (admin session unavailable). "
-                      "Re-run 'setup' after fixing this, or bootstrap the account by hand per the redesign plan's "
-                      "rollout step 4.")
+            sys.exit(f"error: could not create or confirm the '{email}' homelab-api account "
+                      "(no usable admin session). Log in as an admin yourself first "
+                      "(homelab-cli login), or re-run this with --password-file/--password-env "
+                      "if the account already exists and you just need to log this server in.")
 
         password = _resolve_service_password(create_resp, args)
         login = subprocess.run(
@@ -688,8 +709,8 @@ def cmd_setup(args):
 
         validate = _run_cli(cli_dir, "validate")
         if validate.returncode != 0:
-            sys.exit(f"error: control-plane session still invalid after login: {_proc_error_text(validate)}")
-        print(f"Control-plane session confirmed valid for '{email}'.")
+            sys.exit(f"error: still not logged in to homelab-api as '{email}' after login: {_proc_error_text(validate)}")
+        print(f"Logged in to homelab-api as '{email}'.")
 
     # homelab_cli.password only ever holds a value transiently, if at all
     # (--password-file/--password-env content is never itself persisted
@@ -718,7 +739,7 @@ def cmd_setup(args):
 
     print()
     print("Setup complete.")
-    print(f"  Control-plane account: {email}")
+    print(f"  homelab-api account: {email}")
     print(f"  homelab-cli config dir: {cli_dir}")
     print(f"  Reconciliation interval: every {interval_seconds} second(s)")
     print("  (changing reconcile.interval_seconds in config.yml alone does NOT take")
@@ -758,11 +779,11 @@ def main():
 
     p_setup = sub.add_parser(
         "setup",
-        help="Interactively connect this server to the homelab-api control plane "
-             "and install the reconciliation timer",
+        help="Interactively log this server in to homelab-api (creating its account "
+             "first if needed) and install the reconciliation timer",
     )
     p_setup.add_argument("--api-url", help="homelab-api base URL. Prompted for if not set here or in config.yml.")
-    p_setup.add_argument("--account-email", help="Control-plane account email for this server.")
+    p_setup.add_argument("--account-email", help="This server's homelab-api login email.")
     p_setup.add_argument("--password-file", help="Path to a file holding the service account's password "
                                                   "(only consulted if the account already existed).")
     p_setup.add_argument("--password-env", help="Env var holding the service account's password "

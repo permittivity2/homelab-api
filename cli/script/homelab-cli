@@ -97,6 +97,21 @@ def resolve_api_url(args):
     if config.get("api_url"):
         return config["api_url"].rstrip("/")
 
+    if not sys.stdin.isatty():
+        # A non-interactive caller (e.g. another script shelling out to
+        # us, like homelab-backup-server's own setup trying the
+        # operator's ambient session first) has no way to answer this
+        # prompt -- input() would just crash on EOF instead of failing
+        # cleanly. Caught live: this is the common/expected case for
+        # that exact call, not a rare edge case.
+        print(
+            "error: no api_url configured and not running interactively "
+            "-- run 'homelab-cli configure --set-api-url URL' first "
+            "(use --config DIR beforehand if this should be a different session's config)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     url = input("Enter the homelab-api base URL (e.g. https://api.mailmasker.org): ").strip()
     url = url.rstrip("/")
     if not url.startswith("http://") and not url.startswith("https://"):

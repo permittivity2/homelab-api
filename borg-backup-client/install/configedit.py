@@ -47,7 +47,22 @@ def find_insertion_point(lines, path):
         return len(lines), 0
     parent_i, parent_indent = find_line(lines, parent_path)
     if parent_i is None:
-        return None, None
+        if len(parent_path) > 1:
+            # This editor only understands one level of nesting -- a
+            # missing grandparent means the file isn't shaped the way
+            # this tool expects at all, not something to paper over.
+            return None, None
+        # The top-level section itself doesn't exist yet -- e.g. a
+        # host migrated forward from the pre-redesign package, whose
+        # config.yml predates the homelab_cli: block entirely. Append
+        # a brand-new section rather than failing outright: this used
+        # to crash `setup` with "key not found and parent path missing"
+        # on every such host, since there was no way to create a
+        # missing parent, only insert under an existing one.
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.append(f"{parent_path[0]}:\n")
+        return len(lines), 2
     item_indent = parent_indent + 2
     j = parent_i + 1
     while j < len(lines):

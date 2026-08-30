@@ -1,3 +1,18 @@
+homelab-cli (0.2.7) unstable; urgency=medium
+
+  * Fix: `resolve_api_url()` called a blocking `input()` whenever no
+    api_url was configured, with no check for whether stdin was even
+    interactive -- a non-interactive caller (e.g. homelab-backup-server
+    setup's own `homelab-cli admin create-user` subprocess call, trying
+    the operator's ambient session first) hit an unhandled EOF and
+    crashed with a raw Python traceback instead of a clear error. Caught
+    live: this is the common path for that exact call, not a rare edge
+    case, since the invoking root user essentially never has a personal
+    homelab-cli session pre-configured. Now checks stdin.isatty() first,
+    same guard homelab-backup-client's get_passphrase() already used.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 11:15:00 -0500
+
 homelab-cli (0.2.6) unstable; urgency=medium
 
   * Add a `--config DIR` global flag (also $HOMELAB_CLI_CONFIG_DIR) to

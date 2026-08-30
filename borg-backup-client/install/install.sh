@@ -328,7 +328,7 @@ ensure_homelab_cli_session() {
     local api_url
     api_url=$(cfg_get homelab_cli.api_url)
     if [ -z "$api_url" ]; then
-        warn "homelab_cli.api_url is blank; skipping control-plane setup entirely"
+        warn "homelab_cli.api_url is blank; skipping homelab-api setup entirely"
         return 1
     fi
     homelab_cli configure --set-api-url "$api_url" >/dev/null
@@ -338,11 +338,11 @@ ensure_homelab_cli_session() {
         return 0
     fi
 
-    prompt_if_blank homelab_cli.email "Control-plane account email" "homelabbackup@homelab.internal"
+    prompt_if_blank homelab_cli.email "homelab-api login email for this host" "homelabbackup@homelab.internal"
     local email
     email=$(cfg_get homelab_cli.email)
     if [ -z "$email" ]; then
-        warn "homelab_cli.email is blank; skipping control-plane setup entirely"
+        warn "homelab_cli.email is blank; skipping homelab-api setup entirely"
         return 1
     fi
 
@@ -351,14 +351,20 @@ ensure_homelab_cli_session() {
     if [ -n "$password" ]; then
         log "logging in to homelab-api as $email (using saved homelab_cli.password)"
         if ! printf '%s\n' "$password" | homelab_cli login --email "$email" --password-stdin >/dev/null; then
-            warn "homelab-cli login failed; check homelab_cli.email/password and re-run setup"
+            warn "homelab-cli login failed; check homelab_cli.email/password and re-run setup" \
+                "(unlike the backup server's own 'setup', this client does not create the" \
+                "account -- it must already exist; run 'homelab-backup-server setup' on the" \
+                "backup server first, or have an admin create it via 'homelab-cli admin create-user')"
             return 1
         fi
     else
         echo "Log in to homelab-api as $email (used once; only the resulting"
         echo "session is kept -- no password is stored at rest):"
         if ! homelab_cli login --email "$email" >/dev/null; then
-            warn "homelab-cli login failed; re-run setup to retry"
+            warn "homelab-cli login failed; re-run setup to retry" \
+                "(this client does not create the account -- it must already exist; run" \
+                "'homelab-backup-server setup' on the backup server first, or have an admin" \
+                "create it via 'homelab-cli admin create-user')"
             return 1
         fi
     fi
@@ -368,7 +374,7 @@ ensure_homelab_cli_session() {
     cfg_set homelab_cli.password ""
 
     if ! homelab_cli validate >/dev/null 2>&1; then
-        warn "homelab-cli session still not valid after login; skipping control-plane setup"
+        warn "homelab-cli session still not valid after login; skipping homelab-api setup"
         return 1
     fi
     return 0
@@ -409,7 +415,7 @@ kick_reconcile() {
 # homelab-backup-server's own periodic reconciliation job (not any
 # action here) to apply it to authorized_keys. Falls back cleanly (warn
 # and continue, retried on next `setup` run) if homelab_cli.disabled is
-# true or the control-plane session can't be established -- an admin
+# true or the homelab-api login can't be established -- an admin
 # can always fall back to backup_server: hardcoded in config.yml and
 # skip this entirely.
 setup_control_plane() {
@@ -434,12 +440,12 @@ setup_control_plane() {
     chmod 644 "$SSH_KEY.pub"
 
     if [ "$(cfg_get homelab_cli.disabled)" = "true" ]; then
-        log "homelab_cli.disabled is true; skipping control-plane enrollment (set backup_server: manually)"
+        log "homelab_cli.disabled is true; skipping homelab-api enrollment (set backup_server: manually)"
         return
     fi
 
     if ! ensure_homelab_cli_session; then
-        warn "control-plane session unavailable; skipping enrollment for now"
+        warn "not logged in to homelab-api; skipping enrollment for now"
         warn "re-run 'homelab-backup-client setup' later to retry, or set backup_server: manually"
         return
     fi
@@ -691,7 +697,7 @@ print_summary() {
     log "script:      $BIN_DEST"
     log "mode:        $(cfg_get mode)"
     log "schedule:    $(cfg_get schedule.mode)"
-    log "control plane: $([ "$(cfg_get homelab_cli.disabled)" = "true" ] && echo "disabled" || echo "$(cfg_get homelab_cli.api_url)")"
+    log "homelab-api:  $([ "$(cfg_get homelab_cli.disabled)" = "true" ] && echo "disabled" || echo "$(cfg_get homelab_cli.api_url)")"
     echo
     log "check status with: systemctl status homelab-backup-client.service homelab-backup-client.timer 2>/dev/null"
     log "check logs with:   journalctl -t homelab-backup-client -f"

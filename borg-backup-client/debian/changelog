@@ -1,3 +1,21 @@
+homelab-backup-client (0.4.4) unstable; urgency=medium
+
+  * Fix: the same class of bug just found in homelab-backup-server's
+    config editor exists here too -- `setup` on a host migrated forward
+    from the pre-redesign package (whose config.yml never had a
+    homelab_cli: block) would crash the first time it tried to set
+    homelab_cli.api_url/email, since configedit.py could only insert a
+    key under an EXISTING parent section, not create a missing one. Now
+    appends a brand-new top-level section when needed, matching the fix
+    on the server side.
+  * Reworded "control-plane" jargon in install.sh's prompts/log lines
+    toward plain language ("homelab-api login email for this host",
+    "logging in to homelab-api as X"). The login-failure warning now
+    also explains that (unlike the backup server's own `setup`) this
+    client never creates the account -- it must already exist.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 11:15:00 -0500
+
 homelab-backup-client (0.4.3) unstable; urgency=medium
 
   * `list-archives --archive NAME` now lists that one archive's file
