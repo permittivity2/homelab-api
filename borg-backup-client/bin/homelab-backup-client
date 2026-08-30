@@ -942,4 +942,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # A bare Ctrl-C almost always lands while a borg subprocess
+        # (list-archives/restore, most commonly) is mid-run --
+        # subprocess.run()'s own wait loop re-raises it after the child
+        # exits, which otherwise surfaces as a raw Python traceback that
+        # looks like a crash rather than an interrupted command. 128+SIGINT
+        # is the conventional shell exit code for "killed by signal N".
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)

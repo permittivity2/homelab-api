@@ -1,3 +1,14 @@
+homelab-backup-client (0.4.2) unstable; urgency=medium
+
+  * A Ctrl-C during `list-archives`/`restore`/`backup` (most commonly
+    mid-restore, while borg is streaming a long file list) surfaced as a
+    raw Python traceback from inside subprocess.run()'s wait loop --
+    harmless, but looked like a crash. Now caught at the top level and
+    printed as a plain "interrupted" message, exiting 130 (the usual
+    shell convention for "killed by SIGINT").
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 10:05:00 -0500
+
 homelab-backup-client (0.4.1) unstable; urgency=medium
 
   * Fix: re-running `setup`/`configure` unconditionally rewrote and
