@@ -15,6 +15,26 @@ use YAML::XS qw(LoadFile);
 use Carp qw(croak);
 
 my $config = LoadFile($ENV{HOMELAB_API_CONFIG} || '/etc/homelab/api/config.yml');
+
+# Read once at startup (not per-request -- this never changes for the
+# lifetime of the process) from a file generated at build time by
+# debian/rules (`dpkg-parsechangelog -S Version`), the same authoritative
+# source dpkg itself uses to stamp the .deb's version -- never hardcoded
+# here, so it can't drift out of sync with a release the way the old
+# hardcoded '0.2~beta1' below had. Deliberately not read from Postgres:
+# version is a property of the deployed code, not application data, and
+# a version check should stay useful even when the database is down.
+my $VERSION_FILE = '/usr/share/homelab-api/VERSION';
+my $VERSION = do {
+    if (open my $fh, '<', $VERSION_FILE) {
+        my $v = <$fh>;
+        chomp $v if defined $v;
+        $v || 'unknown';
+    } else {
+        'unknown'; # e.g. running from a git checkout, no package installed
+    }
+};
+
 my $db = Homelab::Database->new($config);
 my $auth = Homelab::Auth->new($db, $config);
 my $limiter = Homelab::RateLimit->new($db);
@@ -317,7 +337,7 @@ get '/api/v1/health' => sub ($c) {
         $c,
         {
             status   => $status,
-            version  => '0.2~beta1',
+            version  => $VERSION,
             database => $db_status,
         },
         $status eq 'ok' ? 200 : 500

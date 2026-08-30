@@ -10,3 +10,5 @@ override_dh_install:
 	install -D -m 644 systemd/homelab-api.service debian/homelab-api/etc/systemd/system/homelab-api.service
 	find migrations -type f -name '*.sql' -exec install -D -m 644 {} debian/homelab-api/usr/share/homelab-api/{} \;
 	install -D -m 644 backup-paths.txt debian/homelab-api/usr/share/homelab-api/backup-paths.txt
+	mkdir -p debian/homelab-api/usr/share/homelab-api
+	dpkg-parsechangelog -S Version > debian/homelab-api/usr/share/homelab-api/VERSION

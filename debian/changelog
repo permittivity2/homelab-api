@@ -1,3 +1,23 @@
+homelab-api (0.1.30) unstable; urgency=medium
+
+  * Add a real version to GET /api/v1/health -- it hardcoded a stale
+    "0.2~beta1" that had drifted completely out of sync with the actual
+    package version (0.1.29 at the time this was noticed). Now read once
+    at process startup from /usr/share/homelab-api/VERSION, a file
+    debian/rules generates at build time via
+    `dpkg-parsechangelog -S Version` -- the same source dpkg itself uses
+    to stamp the .deb, so it can't drift again. Deliberately file-based,
+    not a database column: version is a property of the deployed code,
+    not application data, and a version check should stay useful even
+    when the database is down. Motivated by a real incident: a host
+    running an old homelab-api (0.1.26, predating the whole backup
+    control-plane) surfaced only as raw 404 HTML pages and a silently
+    missing `roles` field, with no easy way to see what was actually
+    running -- a version endpoint would have made that immediately
+    obvious.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 13:45:00 -0500
+
 homelab-api (0.1.29) unstable; urgency=medium
 
   * Fix: _full_pattern logged "Use of uninitialized value $parts[0] in join
