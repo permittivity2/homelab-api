@@ -10,40 +10,104 @@ homelab-cli\-admin \- site administration commands for homelab\-cli
 .RI [ args ...]
 .SH DESCRIPTION
 .B homelab-cli admin
-groups role, permission, and user-management operations under one
-command family. Every subcommand requires the logged-in account to
-hold the
+groups user- and role-management operations under one command family:
+.B user
+and
+.BR role .
+Every action requires the logged-in account to hold the
 .I site_admin
 role server-side; the CLI does not enforce this locally, the server
 does.
 .P
-Run
+Each of
+.B user
+and
+.B role
+takes exactly one action flag per invocation (they're mutually
+exclusive), plus whatever flags that action needs. Run
 .RI "\(lqhomelab-cli admin " command " --help\(rq"
-for a given subcommand's own arguments.
-.SH COMMANDS
+for the full flag list.
+.SH "USER ACTIONS"
+.RI "(\(lqhomelab-cli admin user " "--flag ..." "\(rq)"
 .TP
-.BR list-roles ", " role-permissions
-List all roles, or the endpoints granted to a specific role.
+.B --create
+Create a dovecot.users account (idempotent) and assign it an initial
+role. Requires
+.BR --email " and " --role .
+Generates a random server-side password and prints it once \- never
+accepts a client-supplied password. If the account already exists, no
+password is generated; the role is still (idempotently) assigned.
 .TP
-.BR grant-permission ", " revoke-permission
-Grant or revoke an endpoint (e.g.
-.RI \(lqGET\ /api/v1/drive/quota\(rq )
-on a role.
+.B --list
+List all accounts, their roles, and active flag.
 .TP
-.BR user-roles ", " grant-role ", " revoke-role
-List, assign, or revoke a role on a specific user account.
+.B --list-roles
+List
+.BR --email 's
+roles.
 .TP
-.B reset-password
-Reset a user's password to a randomly generated dictionary passphrase.
-Never accepts a client-supplied password \- the new passphrase is
-generated server-side and printed exactly once in the response. It is
-not recoverable afterward; if lost, reset again.
+.BI --add-role " ROLE"
+Assign
+.I ROLE
+to
+.BR --email .
 .TP
-.BR revoke-tokens ", " force-relogin
-Revoke all of a user's refresh tokens, forcing re-login on their next
-token refresh. Both commands perform the identical action against two
-distinct server endpoints of the same name \- pick whichever name reads
-better in context.
+.BI --remove-role " ROLE"
+Revoke
+.I ROLE
+from
+.BR --email .
+.TP
+.B --reset-password
+Reset
+.BR --email 's
+password to a randomly generated dictionary passphrase, printed once.
+Not recoverable afterward; if lost, reset again.
+.TP
+.BR --revoke-all-tokens ", " --force-relogin
+Revoke all of
+.BR --email 's
+refresh tokens, forcing re-login on their next token refresh. Both
+flags perform the identical action against two distinct server
+endpoints of the same name \- pick whichever name reads better in
+context.
+.SH "ROLE ACTIONS"
+.RI "(\(lqhomelab-cli admin role " "--flag ..." "\(rq)"
+.TP
+.B --create
+Create a new role (idempotent). Requires
+.BR --role ,
+optionally
+.BR --description .
+.TP
+.B --remove-role
+Delete
+.BR --role .
+Refused if it's
+.IR site_admin " or " user ,
+or if any user still holds it.
+.TP
+.B --list
+List all roles, each with its granted endpoint permissions.
+.TP
+.B --add-permissions
+Grant one or more endpoints to
+.B --role
+(via
+.BR --permissions ,
+e.g.
+.RI \(lqGET\ /api/v1/drive/quota\(rq ).
+Endpoints already on the role are left as-is.
+.TP
+.B --remove-permissions
+Revoke one or more endpoints from
+.B --role
+(via
+.BR --permissions ).
+Endpoints not on the role are left as-is.
+.TP
+.B --list-all-available-role-permissions
+List every endpoint that could be granted to a role.
 .SH SEE ALSO
 .BR homelab-cli (8),
 .BR homelab-cli-mail (8),

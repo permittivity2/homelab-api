@@ -3,7 +3,7 @@
 """Command-line client for the Homelab API.
 
 Wraps every homelab-api REST endpoint as a subcommand, grouped by area
-(e.g. `homelab-cli drive quota`, `homelab-cli admin list-roles`); a few
+(e.g. `homelab-cli drive quota`, `homelab-cli admin role --list`); a few
 session/auth commands (login, logout, configure, health, ...) stay
 top-level since they're used before any group context applies. Persists a
 login session (JWT + refresh token) under ~/.config/homelab-cli/ and
@@ -771,58 +771,100 @@ def cmd_create_zip(args):
 # Admin (site_admin only) handlers
 # ---------------------------------------------------------------------------
 
-def cmd_admin_list_roles(args):
-    return _print_response(_request(args, "GET", "/api/v1/admin/roles"))
+def _require(args, *names):
+    """Exits with an error listing any of `names` that are missing/empty on
+    `args` -- used by the admin user/role dispatchers below since argparse's
+    mutually-exclusive-group actions can't each declare their own distinct
+    'required' companions."""
+    missing = [f"--{n.replace('_', '-')}" for n in names if not getattr(args, n, None)]
+    if missing:
+        print(f"error: {', '.join(missing)} required for this action", file=sys.stderr)
+        sys.exit(2)
 
 
-def cmd_admin_list_users(args):
-    return _print_response(_request(args, "GET", "/api/v1/admin/users"))
+def cmd_admin_user(args):
+    if args.create:
+        _require(args, "email", "role")
+        body = {"email": args.email, "role": args.role}
+        if args.quota_mb is not None:
+            body["quota_mb"] = args.quota_mb
+        return _print_response(_request(args, "POST", "/api/v1/admin/users", json=body))
+
+    if args.list:
+        return _print_response(_request(args, "GET", "/api/v1/admin/users"))
+
+    if args.list_roles:
+        _require(args, "email")
+        return _print_response(_request(args, "GET", f"/api/v1/admin/users/{args.email}/roles"))
+
+    if args.add_role:
+        _require(args, "email")
+        body = {"role": args.add_role}
+        return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/roles", json=body))
+
+    if args.remove_role:
+        _require(args, "email")
+        return _print_response(
+            _request(args, "DELETE", f"/api/v1/admin/users/{args.email}/roles/{args.remove_role}")
+        )
+
+    if args.reset_password:
+        _require(args, "email")
+        return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/reset-password"))
+
+    # --revoke-all-tokens and --force-relogin hit distinct server endpoints
+    # that perform the identical action -- pick whichever name reads better.
+    if args.revoke_all_tokens or args.force_relogin:
+        _require(args, "email")
+        suffix = "force-relogin" if args.force_relogin else "revoke-tokens"
+        return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/{suffix}"))
 
 
-def cmd_admin_role_permissions(args):
-    return _print_response(_request(args, "GET", f"/api/v1/admin/roles/{args.role}/permissions"))
+def cmd_admin_role(args):
+    if args.create:
+        _require(args, "role")
+        body = {"name": args.role}
+        if args.description:
+            body["description"] = args.description
+        return _print_response(_request(args, "POST", "/api/v1/admin/roles", json=body))
 
+    if args.remove_role:
+        _require(args, "role")
+        return _print_response(_request(args, "DELETE", f"/api/v1/admin/roles/{args.role}"))
 
-def cmd_admin_grant_permission(args):
-    body = {"endpoint": args.endpoint}
-    return _print_response(_request(args, "POST", f"/api/v1/admin/roles/{args.role}/permissions", json=body))
+    if args.list:
+        return _print_response(_request(args, "GET", "/api/v1/admin/roles"))
 
+    if args.list_all_available_role_permissions:
+        return _print_response(_request(args, "GET", "/api/v1/admin/permissions"))
 
-def cmd_admin_revoke_permission(args):
-    params = {"endpoint": args.endpoint}
-    return _print_response(_request(args, "DELETE", f"/api/v1/admin/roles/{args.role}/permissions", params=params))
-
-
-def cmd_admin_user_roles(args):
-    return _print_response(_request(args, "GET", f"/api/v1/admin/users/{args.email}/roles"))
-
-
-def cmd_admin_grant_role(args):
-    body = {"role": args.role}
-    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/roles", json=body))
-
-
-def cmd_admin_revoke_role(args):
-    return _print_response(_request(args, "DELETE", f"/api/v1/admin/users/{args.email}/roles/{args.role}"))
-
-
-def cmd_admin_reset_password(args):
-    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/reset-password"))
-
-
-def cmd_admin_revoke_tokens(args):
-    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/revoke-tokens"))
-
-
-def cmd_admin_force_relogin(args):
-    return _print_response(_request(args, "POST", f"/api/v1/admin/users/{args.email}/force-relogin"))
-
-
-def cmd_admin_create_user(args):
-    body = {"email": args.email, "role": args.role}
-    if args.quota_mb is not None:
-        body["quota_mb"] = args.quota_mb
-    return _print_response(_request(args, "POST", "/api/v1/admin/users", json=body))
+    if args.add_permissions or args.remove_permissions:
+        _require(args, "role", "permissions")
+        method = "POST" if args.add_permissions else "DELETE"
+        results = []
+        exit_code = 0
+        for endpoint in args.permissions:
+            if method == "POST":
+                resp = _request(
+                    args, "POST", f"/api/v1/admin/roles/{args.role}/permissions", json={"endpoint": endpoint}
+                )
+            else:
+                resp = _request(
+                    args, "DELETE", f"/api/v1/admin/roles/{args.role}/permissions", params={"endpoint": endpoint}
+                )
+            if 200 <= resp.status_code < 300:
+                try:
+                    results.append(resp.json())
+                except ValueError:
+                    results.append({"endpoint": endpoint})
+            else:
+                exit_code = 1
+                try:
+                    results.append({"endpoint": endpoint, "error": resp.json()})
+                except ValueError:
+                    results.append({"endpoint": endpoint, "error": f"HTTP {resp.status_code}: {resp.text}"})
+        print(json.dumps(results, indent=2))
+        return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -1253,69 +1295,76 @@ def build_parser():
     p.add_argument("--dir-id", required=True, help="Destination directory id for the resulting zip.")
 
     # --- Admin (site_admin only) ---
-    admin = add_group("admin", "Site administration (roles/permissions/user management).")
-
-    admin("list-roles", cmd_admin_list_roles, "List all roles.")
-
-    admin(
-        "list-users", cmd_admin_list_users,
-        "List all accounts, their roles, and whether each is active.",
-        description="Lists every dovecot.users account with its assigned roles and its "
-                     "active flag. 'active' reflects the real, already-enforced "
-                     "dovecot.users.active column (a user with active=false cannot log in "
-                     "at all) -- there is currently no admin endpoint to change it, only "
-                     "to read it.",
-    )
-
-    p = admin("role-permissions", cmd_admin_role_permissions, "List endpoints granted to a role.")
-    p.add_argument("role", help="Role name (e.g. user, site_admin).")
-
-    p = admin("grant-permission", cmd_admin_grant_permission, "Grant an endpoint to a role.")
-    p.add_argument("role", help="Role name.")
-    p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
-
-    p = admin("revoke-permission", cmd_admin_revoke_permission, "Revoke an endpoint from a role.")
-    p.add_argument("role", help="Role name.")
-    p.add_argument("--endpoint", required=True, help='Endpoint key, e.g. "GET /api/v1/drive/quota".')
-
-    p = admin("user-roles", cmd_admin_user_roles, "List a user's roles.")
-    p.add_argument("email", help="Target account email.")
-
-    p = admin("grant-role", cmd_admin_grant_role, "Assign a role to a user.")
-    p.add_argument("email", help="Target account email.")
-    p.add_argument("--role", required=True, help="Role name to assign.")
-
-    p = admin("revoke-role", cmd_admin_revoke_role, "Revoke a role from a user.")
-    p.add_argument("email", help="Target account email.")
-    p.add_argument("role", help="Role name to revoke.")
+    admin = add_group("admin", "Site administration (users/roles/permissions).")
 
     p = admin(
-        "reset-password", cmd_admin_reset_password,
-        "Reset a user's password to a random passphrase (returned once).",
-        description="Resets the target user's password to a randomly generated dictionary "
-                     "passphrase. Never accepts a client-supplied password. The new plaintext "
-                     "passphrase is printed once in the response and is not recoverable afterward.",
+        "user", cmd_admin_user, "Manage user accounts.",
+        description="One action flag per invocation. --email identifies the target account "
+                     "for every action except --list. 'active' (in --list's output) reflects "
+                     "the real, already-enforced dovecot.users.active column (a user with "
+                     "active=false cannot log in at all) -- there is currently no action here "
+                     "to change it, only to read it.",
     )
-    p.add_argument("email", help="Target account email.")
-
-    p = admin("revoke-tokens", cmd_admin_revoke_tokens, "Revoke all of a user's refresh tokens.")
-    p.add_argument("email", help="Target account email.")
-
-    p = admin("force-relogin", cmd_admin_force_relogin,
-              "Force a user to re-login (identical action to revoke-tokens).")
-    p.add_argument("email", help="Target account email.")
+    action = p.add_mutually_exclusive_group(required=True)
+    action.add_argument(
+        "--create", action="store_true",
+        help="Create a dovecot.users account (idempotent) and assign it an initial role. "
+             "Requires --email and --role. Generates a random server-side password and "
+             "prints it once -- never accepts a client-supplied password. If the account "
+             "already exists, no password is generated; the role is still (idempotently) "
+             "assigned.",
+    )
+    action.add_argument("--list", action="store_true", help="List all accounts, their roles, and active flag.")
+    action.add_argument("--list-roles", action="store_true", help="List --email's roles.")
+    action.add_argument("--add-role", metavar="ROLE", help="Assign ROLE to --email.")
+    action.add_argument("--remove-role", metavar="ROLE", help="Revoke ROLE from --email.")
+    action.add_argument(
+        "--reset-password", action="store_true",
+        help="Reset --email's password to a random passphrase, printed once. Never accepts "
+             "a client-supplied password; not recoverable afterward if lost.",
+    )
+    action.add_argument("--revoke-all-tokens", action="store_true", help="Revoke all of --email's refresh tokens.")
+    action.add_argument(
+        "--force-relogin", action="store_true",
+        help="Alias of --revoke-all-tokens (identical action, different server endpoint).",
+    )
+    p.add_argument("--email", help="Target account email.")
+    p.add_argument("--role", help="Initial role to assign (--create only, e.g. user, backup, site_admin).")
+    p.add_argument("--quota-mb", type=int, help="Mail quota in MB (--create only). Default: 1024.")
 
     p = admin(
-        "create-user", cmd_admin_create_user,
-        "Create a dovecot.users account (idempotent) and assign it an initial role.",
-        description="Generates a random server-side password and prints it once, exactly "
-                     "like 'admin reset-password' — never accepts a client-supplied "
-                     "password. If the account already exists, no password is generated; "
-                     "the role is still (idempotently) assigned.",
+        "role", cmd_admin_role, "Manage roles and their endpoint permissions.",
+        description="One action flag per invocation. --role identifies the target role for "
+                     "every action except --list and --list-all-available-role-permissions.",
     )
-    p.add_argument("email", help="Account email to create.")
-    p.add_argument("--role", required=True, help="Initial role to assign (e.g. user, backup, site_admin).")
-    p.add_argument("--quota-mb", type=int, help="Mail quota in MB. Default: 1024.")
+    action = p.add_mutually_exclusive_group(required=True)
+    action.add_argument("--create", action="store_true", help="Create a new role (idempotent). Requires --role.")
+    action.add_argument(
+        "--remove-role", action="store_true",
+        help="Delete --role. Refused if it's site_admin/user, or if any user still holds it.",
+    )
+    action.add_argument("--list", action="store_true", help="List all roles, each with its granted permissions.")
+    action.add_argument(
+        "--add-permissions", action="store_true",
+        help="Grant one or more endpoints to --role (via --permissions). Endpoints already "
+             "on the role are left as-is.",
+    )
+    action.add_argument(
+        "--remove-permissions", action="store_true",
+        help="Revoke one or more endpoints from --role (via --permissions). Endpoints not "
+             "on the role are left as-is.",
+    )
+    action.add_argument(
+        "--list-all-available-role-permissions", action="store_true",
+        help="List every endpoint that could be granted to a role.",
+    )
+    p.add_argument("--role", help="Role name.")
+    p.add_argument("--description", help="Description for --create.")
+    p.add_argument(
+        "--permissions", nargs="+",
+        help='One or more endpoint keys for --add-permissions/--remove-permissions, e.g. '
+             '"GET /api/v1/drive/quota" "POST /api/v1/backup/enroll".',
+    )
 
     # --- Backup control plane ---
     backup = add_group(

@@ -1,3 +1,24 @@
+homelab-api (0.1.31) unstable; urgency=medium
+
+  * New admin routes backing homelab-cli 0.2.8's restructured `admin role`
+    command: POST /api/v1/admin/roles (create, idempotent), DELETE
+    /api/v1/admin/roles/:role (refuses site_admin/user, and refuses while
+    any user still holds the role -- api.role_permissions/
+    role_grant_permissions rows for it clean up via existing ON DELETE
+    CASCADE), and GET /api/v1/admin/permissions (every endpoint this
+    server has ever registered a route for, the set --add-permissions can
+    choose from). No migration needed -- api.roles already had full CRUD
+    granted to homelab_api since migration 006.
+  * Fix: _known_endpoints() (used by `admin role --add-permissions`/
+    `--remove-permissions` to reject typo'd endpoint keys, and now also by
+    the new /permissions route above) called $route->via, which doesn't
+    exist on this Mojolicious version's Mojolicious::Routes::Route --
+    the accessor is ->methods. Latent since whenever this was written;
+    never actually exercised until GET /api/v1/admin/permissions hit it
+    live during this release's testing.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
 homelab-api (0.1.30) unstable; urgency=medium
 
   * Add a real version to GET /api/v1/health -- it hardcoded a stale

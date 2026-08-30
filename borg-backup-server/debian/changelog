@@ -1,3 +1,13 @@
+homelab-backup-server (0.4.5) unstable; urgency=medium
+
+  * Update the two `homelab-cli admin create-user` subprocess calls (and
+    matching log/error text) in _create_user_via_admin_session() to
+    `admin user --create --email ... --role ...`, matching homelab-cli
+    0.2.8's restructured admin command. Functionally identical -- the old
+    positional email argument is now `--email`.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
 homelab-backup-server (0.4.4) unstable; urgency=medium
 
   * Fix: `setup` could stall invisibly forever right after "Checking for

@@ -112,9 +112,9 @@ sub _known_endpoints {
     my $walk = sub {
         my ($routes, $recurse) = @_;
         for my $route (@{ $routes->children }) {
-            if (@{ $route->via // [] }) {
+            if (@{ $route->methods // [] }) {
                 my $pattern = _full_pattern($route);
-                push @out, uc($_) . ' ' . $pattern for @{ $route->via };
+                push @out, uc($_) . ' ' . $pattern for @{ $route->methods };
             }
             $recurse->($route, $recurse);
         }
@@ -1109,6 +1109,28 @@ $a->delete('/roles/:role/permissions' => sub ($c) {
         unless $endpoint;
 
     my $result = $roles->revoke_endpoint($role, $endpoint);
+    return _set_json_response($c, $result, $result->{error} ? 400 : 200);
+});
+
+# Every endpoint this server has ever registered a route for, regardless of
+# whether any role currently holds it -- the set 'admin role --add-permissions'
+# is allowed to choose from. Same source _known_endpoints() already uses to
+# reject typos in the grant/revoke routes above, just surfaced directly.
+$a->get('/permissions' => sub ($c) {
+    return _set_json_response($c, { success => 1, permissions => _known_endpoints() }, 200);
+});
+
+$a->post('/roles' => sub ($c) {
+    my $json = $c->req->json // {};
+    my $name = $json->{name};
+    return _set_json_response($c, { success => 0, error => 'name required' }, 400) unless $name;
+
+    my $result = $roles->create_role($name, $json->{description});
+    return _set_json_response($c, $result, $result->{error} ? 400 : ($result->{created} ? 201 : 200));
+});
+
+$a->delete('/roles/:role' => sub ($c) {
+    my $result = $roles->delete_role($c->stash('role'));
     return _set_json_response($c, $result, $result->{error} ? 400 : 200);
 });
 

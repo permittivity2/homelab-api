@@ -141,6 +141,49 @@ sub list_roles_with_permissions {
     return \@order;
 }
 
+# Idempotent: an existing role of the same name is left untouched (its
+# description is NOT overwritten) rather than treated as an error, same
+# posture as create_user for an already-existing account.
+sub create_role {
+    my ($self, $role_name, $description) = @_;
+    return { error => 'Role name required' } unless $role_name;
+
+    if ($self->_role_id($role_name)) {
+        return { success => 1, created => 0, role => { name => $role_name } };
+    }
+
+    $self->{db}->query(
+        'INSERT INTO api.roles (name, description) VALUES (?, ?)',
+        $role_name, $description
+    );
+    return { success => 1, created => 1, role => { name => $role_name, description => $description } };
+}
+
+# Refuses to delete 'site_admin'/'user' (the two roles the rest of the app
+# hardcodes assumptions around) and refuses while any user still holds the
+# role, so a delete can never silently strand an account with a dangling
+# role reference. api.role_permissions/api.role_grant_permissions rows for
+# this role are cleaned up automatically via ON DELETE CASCADE (migrations
+# 006/012).
+sub delete_role {
+    my ($self, $role_name) = @_;
+    return { error => "Cannot delete the '$role_name' role" }
+        if $role_name eq 'site_admin' || $role_name eq 'user';
+
+    my $role_id = $self->_role_id($role_name);
+    return { error => 'Unknown role' } unless $role_id;
+
+    my $count = $self->{db}->query_row(
+        'SELECT COUNT(*) AS n FROM api.user_roles WHERE role_id = ?', $role_id
+    );
+    if ($count && $count->{n} > 0) {
+        return { error => "Cannot delete role '$role_name': still assigned to $count->{n} user(s)" };
+    }
+
+    $self->{db}->query('DELETE FROM api.roles WHERE id = ?', $role_id);
+    return { success => 1, role => $role_name, deleted => 1 };
+}
+
 sub _role_id {
     my ($self, $role_name) = @_;
     my $role = $self->{db}->query_row('SELECT id FROM api.roles WHERE name = ?', $role_name);

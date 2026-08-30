@@ -1,3 +1,11 @@
+homelab-backup-client (0.4.5) unstable; urgency=medium
+
+  * Update install.sh's error hints from 'homelab-cli admin create-user'
+    to 'homelab-cli admin user --create', matching homelab-cli 0.2.8's
+    restructured admin command (no behavior change here, just text).
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
 homelab-backup-client (0.4.4) unstable; urgency=medium
 
   * Fix: the same class of bug just found in homelab-backup-server's

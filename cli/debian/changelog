@@ -1,3 +1,32 @@
+homelab-cli (0.2.8) unstable; urgency=medium
+
+  * BREAKING: restructured `admin` from a flat list of ~12 subcommands
+    (list-roles, list-users, role-permissions, grant-permission,
+    revoke-permission, user-roles, grant-role, revoke-role, reset-password,
+    revoke-tokens, force-relogin, create-user) into two: `admin user` and
+    `admin role`, each taking one action flag per invocation. Motivated by
+    an operator's own point: "service account" and a growing pile of
+    similarly-shaped single-purpose subcommands were becoming hard to
+    discover and remember. Mapping: list-users/user-roles/grant-role/
+    revoke-role/reset-password/revoke-tokens/force-relogin/create-user
+    become `admin user --list/--list-roles/--add-role/--remove-role/
+    --reset-password/--revoke-all-tokens/--force-relogin/--create`;
+    list-roles/grant-permission/revoke-permission become `admin role
+    --list/--add-permissions/--remove-permissions` (the last two now
+    accept multiple `--permissions` in one call). Dropped `role-
+    permissions` as its own command -- `admin role --list` already embeds
+    each role's permissions inline. No backward-compatible aliases for the
+    old command names, consistent with this project's prior breaking
+    renames.
+  * New `admin role --create`/`--remove-role`/
+    `--list-all-available-role-permissions`, backed by new homelab-api
+    0.1.31 endpoints -- roles could previously only be seeded by hand-
+    applied migrations, with no way to create or retire one, or to see
+    the full set of grantable endpoints, without going through the
+    database directly.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 18:00:00 -0500
+
 homelab-cli (0.2.7) unstable; urgency=medium
 
   * Fix: `resolve_api_url()` called a blocking `input()` whenever no

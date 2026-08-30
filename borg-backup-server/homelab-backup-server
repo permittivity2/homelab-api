@@ -592,7 +592,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
     1. Checks for an ambient admin login (the operator's own default
        homelab-cli session, no --config override) and reports what it
        found, so this isn't a silent guess.
-    2. If one was found, attempts `admin create-user` with it regardless
+    2. If one was found, attempts `admin user --create` with it regardless
        of how promising its roles looked -- homelab-api is always the
        authority on whether an account can grant `role`, not a
        client-side guess.
@@ -600,7 +600,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
        dir (discarded after) only if no ambient session worked at all,
        or the one found couldn't create the account.
 
-    Returns the parsed JSON response from `admin create-user`, or None
+    Returns the parsed JSON response from `admin user --create`, or None
     on failure."""
     print(f"Checking for an existing admin login (using your own ~/.config/homelab-cli --")
     print(f"this may point at a different homelab-api than this run's target, {args.api_url})...")
@@ -610,14 +610,14 @@ def _create_user_via_admin_session(email, args, role="backup"):
         print(f"Found an existing login for '{ambient['email']}' (roles: {roles_text}).")
 
         result = subprocess.run(
-            ["homelab-cli", "admin", "create-user", email, "--role", role],
+            ["homelab-cli", "admin", "user", "--create", "--email", email, "--role", role],
             capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             try:
                 return json.loads(result.stdout)
             except ValueError:
-                print(f"warning: 'admin create-user' succeeded but returned unparseable output: {result.stdout!r}",
+                print(f"warning: 'admin user --create' succeeded but returned unparseable output: {result.stdout!r}",
                       file=sys.stderr)
                 return None
         print(f"Could not create '{email}' using '{ambient['email']}' (roles: {roles_text}): "
@@ -656,11 +656,11 @@ def _create_user_via_admin_session(email, args, role="backup"):
         print(f"Logged in as '{admin_email}' (roles: {roles_text}).")
 
         result = subprocess.run(
-            ["homelab-cli", "--config", tmp_dir, "admin", "create-user", email, "--role", role],
+            ["homelab-cli", "--config", tmp_dir, "admin", "user", "--create", "--email", email, "--role", role],
             capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
-            print(f"error: 'admin create-user' failed while logged in as '{admin_email}' "
+            print(f"error: 'admin user --create' failed while logged in as '{admin_email}' "
                   f"(roles: {roles_text}): {_proc_error_text(result)}", file=sys.stderr)
             print("This usually means that account needs site_admin (or an explicit grant) to "
                   "create other accounts.", file=sys.stderr)
@@ -668,7 +668,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
         try:
             return json.loads(result.stdout)
         except ValueError:
-            print(f"warning: 'admin create-user' succeeded but returned unparseable output: {result.stdout!r}",
+            print(f"warning: 'admin user --create' succeeded but returned unparseable output: {result.stdout!r}",
                   file=sys.stderr)
             return None
         # tmp_dir (and the admin session it briefly held) is discarded here.
@@ -677,7 +677,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
 def _resolve_service_password(create_resp, args):
     """Picks the password to log the backup account into. A freshly
     created account's password always comes back in `create_resp`
-    (the server generates it -- `admin create-user` never accepts a
+    (the server generates it -- `admin user --create` never accepts a
     client-supplied password). If the account already existed (no
     "password" key), we have no way to learn its current password from
     the API; fall back to an explicitly supplied one, then finally to a
@@ -702,7 +702,7 @@ def _resolve_service_password(create_resp, args):
         f"warning: this homelab-api account already existed and no password was supplied "
         f"(--password-file/--password-env); generating a new one via openssl, which will "
         f"only work if it happens to match the account's real password. If login below "
-        f"fails, rotate the account's password first (homelab-cli admin reset-password) "
+        f"fails, rotate the account's password first (homelab-cli admin user --reset-password) "
         f"and re-run 'setup' with --password-file/--password-env.",
         file=sys.stderr,
     )

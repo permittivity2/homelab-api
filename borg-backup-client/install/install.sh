@@ -354,7 +354,7 @@ ensure_homelab_cli_session() {
             warn "homelab-cli login failed; check homelab_cli.email/password and re-run setup" \
                 "(unlike the backup server's own 'setup', this client does not create the" \
                 "account -- it must already exist; run 'homelab-backup-server setup' on the" \
-                "backup server first, or have an admin create it via 'homelab-cli admin create-user')"
+                "backup server first, or have an admin create it via 'homelab-cli admin user --create')"
             return 1
         fi
     else
@@ -364,7 +364,7 @@ ensure_homelab_cli_session() {
             warn "homelab-cli login failed; re-run setup to retry" \
                 "(this client does not create the account -- it must already exist; run" \
                 "'homelab-backup-server setup' on the backup server first, or have an admin" \
-                "create it via 'homelab-cli admin create-user')"
+                "create it via 'homelab-cli admin user --create')"
             return 1
         fi
     fi
