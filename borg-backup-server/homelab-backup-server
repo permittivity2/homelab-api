@@ -671,8 +671,14 @@ def cmd_setup(args):
     args.api_url = api_url  # so _create_user_via_admin_session can reuse it
     cfg_set_scalar(("homelab_api_url",), api_url)
 
+    print()
+    print("This server needs its own homelab-api login to enroll clients and report")
+    print("in. Use the SAME shared account across your whole backup fleet (the")
+    print("default below) -- NOT your own personal/admin account. If that shared")
+    print("account doesn't exist in homelab-api yet, you'll be asked next for YOUR")
+    print("OWN existing admin account, once, just to create it (a separate prompt).")
     email = args.account_email or cfg["homelab_cli"]["email"] or DEFAULT_ACCOUNT_EMAIL
-    email = _prompt("homelab-api login email for this server", email)
+    email = _prompt("This server's homelab-api login (Enter to accept the shared default)", email)
     cfg_set_scalar(("homelab_cli", "email"), email)
 
     cli_dir = cfg["homelab_cli"]["config_dir"] or DEFAULT_HOMELAB_CLI_CONFIG_DIR
@@ -687,11 +693,7 @@ def cmd_setup(args):
     if validate.returncode == 0:
         print(f"Already logged in to homelab-api as '{email}' -- nothing more to do here.")
     else:
-        print(f"Not logged in to homelab-api as '{email}' yet.")
-        print("This account doesn't need to exist ahead of time: if it's missing, you'll")
-        print("be asked once for an ADMIN homelab-api account (one allowed to create new")
-        print("accounts) to create it. After that, this server keeps its own login and")
-        print("you won't be asked for admin credentials again.")
+        print(f"Not logged in to homelab-api as '{email}' yet -- creating/logging in now.")
         create_resp = _create_user_via_admin_session(email, args)
         if create_resp is None:
             sys.exit(f"error: could not create or confirm the '{email}' homelab-api account "
@@ -783,7 +785,9 @@ def main():
              "first if needed) and install the reconciliation timer",
     )
     p_setup.add_argument("--api-url", help="homelab-api base URL. Prompted for if not set here or in config.yml.")
-    p_setup.add_argument("--account-email", help="This server's homelab-api login email.")
+    p_setup.add_argument("--account-email",
+        help="This server's homelab-api login email -- the SAME shared account "
+             f"across your whole backup fleet, not your own. Default: {DEFAULT_ACCOUNT_EMAIL}")
     p_setup.add_argument("--password-file", help="Path to a file holding the service account's password "
                                                   "(only consulted if the account already existed).")
     p_setup.add_argument("--password-env", help="Env var holding the service account's password "
@@ -800,4 +804,21 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # A bare Ctrl-C during setup's subprocess calls (homelab-cli
+        # invocations, most commonly) otherwise surfaces as a raw Python
+        # traceback that looks like a crash rather than an interrupted
+        # command -- same fix already applied to homelab-backup-client.
+        # 128+SIGINT is the conventional shell exit code for this.
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
+    except EOFError:
+        # setup's _prompt()/getpass calls hit this if stdin runs out
+        # entirely (e.g. a non-interactive/scripted invocation with too
+        # few answers piped in) -- same "don't crash with a traceback
+        # for an expected interruption" reasoning as KeyboardInterrupt.
+        print("\nerror: input ended unexpectedly (are you running this non-interactively "
+              "without enough answers piped in?)", file=sys.stderr)
+        sys.exit(1)

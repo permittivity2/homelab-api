@@ -1,3 +1,23 @@
+homelab-backup-server (0.4.2) unstable; urgency=medium
+
+  * Fix: a Ctrl-C during `setup` (e.g. mid-subprocess while creating/
+    logging in the service account) surfaced as a raw Python traceback
+    instead of a clean interrupt -- caught live. Same fix already
+    applied to homelab-backup-client: caught at the top level, printing
+    "interrupted" and exiting 130. Running out of piped input entirely
+    (EOFError, e.g. a scripted invocation with too few answers) gets the
+    same clean-message treatment instead of its own traceback.
+  * Reworded the first `setup` prompt, which was genuinely ambiguous in
+    practice: an operator typed their own personal admin email there,
+    expecting it to be their own login, when it's actually asking what
+    identity the SERVER ITSELF should use going forward (almost always
+    the same shared account across the whole backup fleet, not a
+    personal one). Now explains this upfront, before the prompt, and
+    explicitly distinguishes it from the separate later prompt that
+    really does want the operator's own admin credentials.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 12:30:00 -0500
+
 homelab-backup-server (0.4.1) unstable; urgency=medium
 
   * Fix: `setup` crashed with "config.yml: key not found and parent path
