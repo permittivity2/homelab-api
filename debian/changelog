@@ -1,3 +1,14 @@
+homelab-api (0.1.29) unstable; urgency=medium
+
+  * Fix: _full_pattern logged "Use of uninitialized value $parts[0] in join
+    or string" on every single request. The root of Mojolicious's route
+    tree has no pattern of its own (->pattern->unparsed is undef there),
+    which _full_pattern's ->parent walk always includes. No behavior
+    change -- an undef part already stringified to '' in the join -- just
+    stops the warning from drowning out everything else in journalctl.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 09:20:00 -0500
+
 homelab-api (0.1.28) unstable; urgency=medium
 
   * Add the backup control-plane surface for homelab-backup-client/-server:

@@ -57,7 +57,7 @@ sub _full_pattern {
     my ($route) = @_;
     my @parts;
     for (my $r = $route; $r; $r = $r->parent) {
-        unshift @parts, $r->pattern->unparsed;
+        unshift @parts, $r->pattern->unparsed // '';
     }
     return join('', @parts);
 }
