@@ -1,3 +1,27 @@
+homelab-backup-server (0.4.3) unstable; urgency=medium
+
+  * Renamed "service account"/"control-plane account" to "backup
+    account" throughout `setup`'s prompts, messages, and --help text --
+    an operator flagged that "service account" was genuinely ambiguous,
+    since a homelab-api box can have several (dovecot, drive, backup,
+    ...); this is specifically the one homelab-api account holding the
+    `backup` role, used by this server and its clients.
+  * Reordered/clarified the account-bootstrap flow. Previously, the
+    first attempt silently tried the operator's own ambient homelab-cli
+    session and only explained anything on failure -- but since `setup`
+    runs as root via sudo, that ambient session almost never exists, so
+    this was nearly always a silent failed step before the real admin
+    prompt. Now: checks for an ambient admin login up front and reports
+    what it found (or didn't) before attempting anything; if an ambient
+    session exists, `validate`'s roles are used to print a precise
+    message when it's rejected ("...failed while logged in as X (roles:
+    user) -- this usually needs site_admin...") instead of a bare API
+    error. homelab-api itself remains the sole authority on whether an
+    account can create others -- the roles fetched here are only ever
+    used for narration, never to block an attempt client-side.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 13:00:00 -0500
+
 homelab-backup-server (0.4.2) unstable; urgency=medium
 
   * Fix: a Ctrl-C during `setup` (e.g. mid-subprocess while creating/

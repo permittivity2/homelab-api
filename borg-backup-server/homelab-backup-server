@@ -10,18 +10,19 @@ Two ways enrollment happens:
     directly on this server (unchanged since the original
     homelab-borg-service-backup-server release -- client hosts never need
     SSH or sudo access to this machine for this to work).
-  * Normally: client hosts submit an enrollment request to the homelab-api
-    control plane (`homelab-cli backup enroll`), and this server's own
-    `reconcile` subcommand -- run on a timer via
-    homelab-backup-server-reconcile.timer -- polls for pending requests
-    and applies them here using the exact same underlying functions as a
-    manual `enroll`/`revoke`.
+  * Normally: client hosts submit an enrollment request to homelab-api
+    (`homelab-cli backup enroll`), and this server's own `reconcile`
+    subcommand -- run on a timer via homelab-backup-server-reconcile.timer
+    -- polls for pending requests and applies them here using the exact
+    same underlying functions as a manual `enroll`/`revoke`.
 
-`setup` connects this server to the homelab-api control plane (creating/
-logging into its own service account if needed) and installs that timer;
-it's the interactive counterpart to `postinst`, which only lays down the
-non-interactive skeleton (system user/group, backup directory, empty
-config/authorized_keys).
+`setup` logs this server in to homelab-api (creating its backup account
+first if needed -- the homelab-api account with the 'backup' role, used
+by this server and its clients; not to be confused with any other
+homelab-* account you may have, like dovecot or drive) and installs that
+timer; it's the interactive counterpart to `postinst`, which only lays
+down the non-interactive skeleton (system user/group, backup directory,
+empty config/authorized_keys).
 """
 import argparse
 import copy
@@ -525,30 +526,80 @@ def _prompt(message, default=None):
     return value or (default or "")
 
 
+def _run_cli_ambient(*args):
+    """Like _run_cli(), but against the invoking operator's own default
+    homelab-cli session (~/.config/homelab-cli), not this server's own
+    isolated one -- used only to check for a pre-existing admin login."""
+    return subprocess.run(["homelab-cli", *args], capture_output=True, text=True)
+
+
+def _check_login(cli_dir=None):
+    """Runs `validate` (against cli_dir's session, or the operator's own
+    ambient default session if cli_dir is None) purely to NARRATE what's
+    going on -- who's logged in and with what roles -- before attempting
+    anything privileged. The actual authorization decision always stays
+    with homelab-api itself (see _create_user_via_admin_session): a role
+    name we don't recognize here could still have grant rights via
+    api.role_grant_permissions, so this is never used to block an
+    attempt client-side, only to make the resulting message precise.
+    Returns {"ok", "email", "roles", "error"}."""
+    proc = _run_cli(cli_dir, "validate") if cli_dir else _run_cli_ambient("validate")
+    if proc.returncode != 0:
+        return {"ok": False, "email": None, "roles": None, "error": _proc_error_text(proc)}
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return {"ok": False, "email": None, "roles": None, "error": f"unparseable response: {proc.stdout!r}"}
+    user = data.get("user") or {}
+    return {"ok": True, "email": user.get("email"), "roles": user.get("roles") or [], "error": None}
+
+
 def _create_user_via_admin_session(email, args, role="backup"):
-    """Creates/verifies this server's own homelab-api account. Tries the
-    invoking operator's own personal homelab-cli session first (no
-    --config override); falls back to a throwaway temp --config dir the
-    operator logs into with their own admin credentials, which is
-    discarded (TemporaryDirectory context exit) once done. Returns the
-    parsed JSON response from `admin create-user`, or None on failure."""
-    print(f"Creating/verifying the '{email}' homelab-api account (role={role})...")
+    """Creates/verifies this server's BACKUP ACCOUNT -- the homelab-api
+    account holding `role`, used by this server and its clients (not to
+    be confused with an admin account, or any other homelab-* account
+    that might exist on this box). Needs an admin account (one allowed
+    to create other accounts) to do this, used once, transiently:
 
-    result = subprocess.run(
-        ["homelab-cli", "admin", "create-user", email, "--role", role],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        try:
-            return json.loads(result.stdout)
-        except ValueError:
-            print(f"warning: 'admin create-user' succeeded but returned unparseable output: {result.stdout!r}",
-                  file=sys.stderr)
-            return None
+    1. Checks for an ambient admin login (the operator's own default
+       homelab-cli session, no --config override) and reports what it
+       found, so this isn't a silent guess.
+    2. If one was found, attempts `admin create-user` with it regardless
+       of how promising its roles looked -- homelab-api is always the
+       authority on whether an account can grant `role`, not a
+       client-side guess.
+    3. Falls back to an explicit admin login into a throwaway --config
+       dir (discarded after) only if no ambient session worked at all,
+       or the one found couldn't create the account.
 
-    print(f"Could not create '{email}' using your own homelab-cli session "
-          f"({_proc_error_text(result)}).")
-    print("Falling back to a one-off admin login in a throwaway session directory.")
+    Returns the parsed JSON response from `admin create-user`, or None
+    on failure."""
+    print(f"Checking for an existing admin login to create/verify the '{email}' backup account...")
+    ambient = _check_login()
+    if ambient["ok"]:
+        roles_text = ", ".join(ambient["roles"]) or "none"
+        print(f"Found an existing login for '{ambient['email']}' (roles: {roles_text}).")
+
+        result = subprocess.run(
+            ["homelab-cli", "admin", "create-user", email, "--role", role],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            try:
+                return json.loads(result.stdout)
+            except ValueError:
+                print(f"warning: 'admin create-user' succeeded but returned unparseable output: {result.stdout!r}",
+                      file=sys.stderr)
+                return None
+        print(f"Could not create '{email}' using '{ambient['email']}' (roles: {roles_text}): "
+              f"{_proc_error_text(result)}")
+        print("This usually means that account needs site_admin (or an explicit grant) to "
+              "create other accounts.")
+    else:
+        print(f"No existing admin login found ({ambient['error']}).")
+
+    print(f"Log in with an admin account now (used once, right here, never saved) to "
+          f"create/verify the '{email}' backup account:")
 
     with tempfile.TemporaryDirectory(prefix="homelab-backup-server-admin-") as tmp_dir:
         os.chmod(tmp_dir, 0o700)
@@ -561,7 +612,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
                   file=sys.stderr)
             return None
 
-        admin_email = _prompt("Admin account email (needs site_admin or user-management rights)")
+        admin_email = _prompt("Admin account email (needs rights to create other accounts)")
         admin_password = getpass.getpass("Admin account password: ")
         login = subprocess.run(
             ["homelab-cli", "--config", tmp_dir, "login", "--email", admin_email, "--password-stdin"],
@@ -571,12 +622,19 @@ def _create_user_via_admin_session(email, args, role="backup"):
             print(f"error: admin login failed: {_proc_error_text(login)}", file=sys.stderr)
             return None
 
+        admin_check = _check_login(tmp_dir)
+        roles_text = ", ".join(admin_check["roles"] or []) if admin_check["ok"] else "unknown"
+        print(f"Logged in as '{admin_email}' (roles: {roles_text}).")
+
         result = subprocess.run(
             ["homelab-cli", "--config", tmp_dir, "admin", "create-user", email, "--role", role],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
-            print(f"error: 'admin create-user' failed: {_proc_error_text(result)}", file=sys.stderr)
+            print(f"error: 'admin create-user' failed while logged in as '{admin_email}' "
+                  f"(roles: {roles_text}): {_proc_error_text(result)}", file=sys.stderr)
+            print("This usually means that account needs site_admin (or an explicit grant) to "
+                  "create other accounts.", file=sys.stderr)
             return None
         try:
             return json.loads(result.stdout)
@@ -588,7 +646,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
 
 
 def _resolve_service_password(create_resp, args):
-    """Picks the password to log the service account into. A freshly
+    """Picks the password to log the backup account into. A freshly
     created account's password always comes back in `create_resp`
     (the server generates it -- `admin create-user` never accepts a
     client-supplied password). If the account already existed (no
@@ -672,13 +730,13 @@ def cmd_setup(args):
     cfg_set_scalar(("homelab_api_url",), api_url)
 
     print()
-    print("This server needs its own homelab-api login to enroll clients and report")
-    print("in. Use the SAME shared account across your whole backup fleet (the")
-    print("default below) -- NOT your own personal/admin account. If that shared")
-    print("account doesn't exist in homelab-api yet, you'll be asked next for YOUR")
-    print("OWN existing admin account, once, just to create it (a separate prompt).")
+    print("Email for this server's BACKUP ACCOUNT -- the homelab-api account with the")
+    print("'backup' role, used by this server (and its clients) to talk to homelab-api.")
+    print("This is separate from any admin account, and separate from other homelab-*")
+    print("accounts you may have on this box (dovecot, drive, etc). Almost always keep")
+    print("the shared default below rather than typing a personal account here.")
     email = args.account_email or cfg["homelab_cli"]["email"] or DEFAULT_ACCOUNT_EMAIL
-    email = _prompt("This server's homelab-api login (Enter to accept the shared default)", email)
+    email = _prompt("This server's backup account (Enter to accept the shared default)", email)
     cfg_set_scalar(("homelab_cli", "email"), email)
 
     cli_dir = cfg["homelab_cli"]["config_dir"] or DEFAULT_HOMELAB_CLI_CONFIG_DIR
@@ -691,15 +749,21 @@ def cmd_setup(args):
 
     validate = _run_cli(cli_dir, "validate")
     if validate.returncode == 0:
-        print(f"Already logged in to homelab-api as '{email}' -- nothing more to do here.")
+        print(f"Backup account '{email}' is already logged in and working -- nothing more to do here.")
     else:
-        print(f"Not logged in to homelab-api as '{email}' yet -- creating/logging in now.")
+        print()
+        print(f"Backup account '{email}' isn't logged in yet.")
+        print("Creating/confirming it needs an ADMIN homelab-api account (one allowed to")
+        print("create other accounts) -- used once, right now, never saved. Since this runs")
+        print("as root via sudo, you almost certainly don't have your own admin login active")
+        print("here already; checking anyway before asking.")
         create_resp = _create_user_via_admin_session(email, args)
         if create_resp is None:
-            sys.exit(f"error: could not create or confirm the '{email}' homelab-api account "
+            sys.exit(f"error: could not create or confirm the '{email}' backup account "
                       "(no usable admin session). Log in as an admin yourself first "
                       "(homelab-cli login), or re-run this with --password-file/--password-env "
-                      "if the account already exists and you just need to log this server in.")
+                      "if the backup account already exists and you just need to log this "
+                      "server in.")
 
         password = _resolve_service_password(create_resp, args)
         login = subprocess.run(
@@ -711,8 +775,8 @@ def cmd_setup(args):
 
         validate = _run_cli(cli_dir, "validate")
         if validate.returncode != 0:
-            sys.exit(f"error: still not logged in to homelab-api as '{email}' after login: {_proc_error_text(validate)}")
-        print(f"Logged in to homelab-api as '{email}'.")
+            sys.exit(f"error: backup account '{email}' still not logged in after login: {_proc_error_text(validate)}")
+        print(f"Backup account '{email}' logged in and working.")
 
     # homelab_cli.password only ever holds a value transiently, if at all
     # (--password-file/--password-env content is never itself persisted
@@ -741,7 +805,7 @@ def cmd_setup(args):
 
     print()
     print("Setup complete.")
-    print(f"  homelab-api account: {email}")
+    print(f"  Backup account: {email}")
     print(f"  homelab-cli config dir: {cli_dir}")
     print(f"  Reconciliation interval: every {interval_seconds} second(s)")
     print("  (changing reconcile.interval_seconds in config.yml alone does NOT take")
@@ -781,16 +845,17 @@ def main():
 
     p_setup = sub.add_parser(
         "setup",
-        help="Interactively log this server in to homelab-api (creating its account "
-             "first if needed) and install the reconciliation timer",
+        help="Interactively log this server in to its homelab-api backup account "
+             "(creating it first if needed) and install the reconciliation timer",
     )
     p_setup.add_argument("--api-url", help="homelab-api base URL. Prompted for if not set here or in config.yml.")
     p_setup.add_argument("--account-email",
-        help="This server's homelab-api login email -- the SAME shared account "
-             f"across your whole backup fleet, not your own. Default: {DEFAULT_ACCOUNT_EMAIL}")
-    p_setup.add_argument("--password-file", help="Path to a file holding the service account's password "
+        help="This server's backup account (the homelab-api account with the 'backup' "
+             "role) -- the SAME shared account across your whole backup fleet, not your "
+             f"own. Default: {DEFAULT_ACCOUNT_EMAIL}")
+    p_setup.add_argument("--password-file", help="Path to a file holding the backup account's password "
                                                   "(only consulted if the account already existed).")
-    p_setup.add_argument("--password-env", help="Env var holding the service account's password "
+    p_setup.add_argument("--password-env", help="Env var holding the backup account's password "
                                                  "(only consulted if the account already existed).")
     p_setup.add_argument("--hostname", help="This server's reachable hostname/IP for backup clients.")
     p_setup.add_argument("--ssh-user", help="SSH user backup clients should connect as.")
