@@ -394,10 +394,18 @@ def _log_warning(msg):
     print(f"[homelab-backup-server reconcile] WARNING: {msg}", file=sys.stderr)
 
 
-def _run_cli(cli_dir, *args):
+def _run_cli(cli_dir, *args, timeout=None):
+    # stdin is explicitly /dev/null, never inherited: without this, a
+    # homelab-cli subprocess that ends up needing to prompt for
+    # something (e.g. resolve_api_url() when no api_url is configured)
+    # inherits this script's REAL terminal as its stdin, while its
+    # prompt text -- along with everything else it prints -- lands in
+    # the capture_output pipe instead of the visible terminal. The
+    # result is an invisible stall: the subprocess is genuinely waiting
+    # on a prompt the operator can never see was asked. Caught live.
     return subprocess.run(
         ["homelab-cli", "--config", cli_dir, *args],
-        capture_output=True, text=True,
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout,
     )
 
 
@@ -526,11 +534,24 @@ def _prompt(message, default=None):
     return value or (default or "")
 
 
-def _run_cli_ambient(*args):
+def _run_cli_ambient(*args, timeout=None):
     """Like _run_cli(), but against the invoking operator's own default
     homelab-cli session (~/.config/homelab-cli), not this server's own
-    isolated one -- used only to check for a pre-existing admin login."""
-    return subprocess.run(["homelab-cli", *args], capture_output=True, text=True)
+    isolated one -- used only to check for a pre-existing admin login.
+    stdin is /dev/null for the same reason as _run_cli() -- see there."""
+    return subprocess.run(
+        ["homelab-cli", *args], capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, timeout=timeout,
+    )
+
+
+# How long the best-effort ambient-admin-session probe gets before giving
+# up and falling straight to the explicit admin-login prompt. This is
+# just a "is there already something usable here" check, not real work --
+# a slow/unresponsive homelab-api shouldn't be allowed to stall the whole
+# setup flow waiting on it, unlike the account-creation calls that follow
+# it (those are the actual work, and get no such short-circuit).
+AMBIENT_CHECK_TIMEOUT_SECONDS = 3
 
 
 def _check_login(cli_dir=None):
@@ -543,7 +564,14 @@ def _check_login(cli_dir=None):
     api.role_grant_permissions, so this is never used to block an
     attempt client-side, only to make the resulting message precise.
     Returns {"ok", "email", "roles", "error"}."""
-    proc = _run_cli(cli_dir, "validate") if cli_dir else _run_cli_ambient("validate")
+    try:
+        if cli_dir:
+            proc = _run_cli(cli_dir, "validate")
+        else:
+            proc = _run_cli_ambient("validate", timeout=AMBIENT_CHECK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "email": None, "roles": None,
+                "error": f"timed out after {AMBIENT_CHECK_TIMEOUT_SECONDS}s"}
     if proc.returncode != 0:
         return {"ok": False, "email": None, "roles": None, "error": _proc_error_text(proc)}
     try:
@@ -574,7 +602,8 @@ def _create_user_via_admin_session(email, args, role="backup"):
 
     Returns the parsed JSON response from `admin create-user`, or None
     on failure."""
-    print(f"Checking for an existing admin login to create/verify the '{email}' backup account...")
+    print(f"Checking for an existing admin login (using your own ~/.config/homelab-cli --")
+    print(f"this may point at a different homelab-api than this run's target, {args.api_url})...")
     ambient = _check_login()
     if ambient["ok"]:
         roles_text = ", ".join(ambient["roles"]) or "none"
@@ -582,7 +611,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
 
         result = subprocess.run(
             ["homelab-cli", "admin", "create-user", email, "--role", role],
-            capture_output=True, text=True,
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             try:
@@ -599,13 +628,13 @@ def _create_user_via_admin_session(email, args, role="backup"):
         print(f"No existing admin login found ({ambient['error']}).")
 
     print(f"Log in with an admin account now (used once, right here, never saved) to "
-          f"create/verify the '{email}' backup account:")
+          f"create/verify the '{email}' backup account at {args.api_url}:")
 
     with tempfile.TemporaryDirectory(prefix="homelab-backup-server-admin-") as tmp_dir:
         os.chmod(tmp_dir, 0o700)
         configure = subprocess.run(
             ["homelab-cli", "--config", tmp_dir, "configure", "--set-api-url", args.api_url],
-            capture_output=True, text=True,
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         if configure.returncode != 0:
             print(f"error: could not configure temporary admin session: {_proc_error_text(configure)}",
@@ -628,7 +657,7 @@ def _create_user_via_admin_session(email, args, role="backup"):
 
         result = subprocess.run(
             ["homelab-cli", "--config", tmp_dir, "admin", "create-user", email, "--role", role],
-            capture_output=True, text=True,
+            capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             print(f"error: 'admin create-user' failed while logged in as '{admin_email}' "
@@ -728,6 +757,7 @@ def cmd_setup(args):
         api_url = _prompt("homelab-api base URL (e.g. https://api.example.org)")
     args.api_url = api_url  # so _create_user_via_admin_session can reuse it
     cfg_set_scalar(("homelab_api_url",), api_url)
+    print(f"Using homelab-api at {api_url} for the rest of this setup.")
 
     print()
     print("Email for this server's BACKUP ACCOUNT -- the homelab-api account with the")

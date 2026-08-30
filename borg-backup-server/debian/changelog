@@ -1,3 +1,27 @@
+homelab-backup-server (0.4.4) unstable; urgency=medium
+
+  * Fix: `setup` could stall invisibly forever right after "Checking for
+    an existing admin login..." -- caught live. That check spawns
+    `homelab-cli validate` with capture_output=True but no stdin
+    redirect, so it inherits this script's REAL terminal as its own
+    stdin; since root's ~/.config/homelab-cli almost never has an
+    api_url configured, homelab-cli fell into its interactive prompt --
+    but that prompt's text landed in the captured (invisible) output
+    pipe while it kept blocking on the real, visible terminal for a
+    line the operator had no way to know was being asked for. Every
+    homelab-cli subprocess call here now explicitly redirects stdin from
+    /dev/null (calls that already pass input= were unaffected). The
+    ambient admin-login check specifically also gets a 3-second timeout
+    now, since it's a best-effort probe, not the real work -- a slow or
+    unresponsive homelab-api there just falls straight through to the
+    explicit admin-login prompt instead of stalling setup.
+  * `setup` now prints the homelab-api URL it resolved and is using,
+    up front and again right before the admin-login prompt (which
+    checks a *different*, ambient session that may point elsewhere) --
+    an operator asked where the tool was even checking against.
+
+ -- Gardner <gardner@homelab>  Sun, 30 Aug 2026 13:20:00 -0500
+
 homelab-backup-server (0.4.3) unstable; urgency=medium
 
   * Renamed "service account"/"control-plane account" to "backup
