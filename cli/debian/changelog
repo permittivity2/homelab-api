@@ -1,3 +1,9 @@
+homelab-cli (0.2.9) unstable; urgency=medium
+
+  * Release v0.2.9
+
+ -- Gardner <gardner@homelab>  Sun, 06 Sep 2026 08:18:53 -0500
+
 homelab-cli (0.2.8) unstable; urgency=medium
 
   * BREAKING: restructured `admin` from a flat list of ~12 subcommands
