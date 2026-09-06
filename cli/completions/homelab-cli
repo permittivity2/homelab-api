@@ -12,4 +12,12 @@
 # command actually runs, well after argparse has finished). Measured at
 # roughly 20-50ms, well under the point of being noticeable, and the same
 # tradeoff tools like kubectl/aws-cli/docker/gcloud all make.
-eval "$(register-python-argcomplete homelab-cli)"
+#
+# The register-python-argcomplete binary name has varied across
+# argcomplete packaging/distro versions -- some ship only the versioned
+# register-python-argcomplete3 -- so try both rather than assuming one.
+if command -v register-python-argcomplete >/dev/null 2>&1; then
+    eval "$(register-python-argcomplete homelab-cli)"
+elif command -v register-python-argcomplete3 >/dev/null 2>&1; then
+    eval "$(register-python-argcomplete3 homelab-cli)"
+fi
